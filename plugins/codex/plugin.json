@@ -6,7 +6,7 @@
   "author": {
     "name": "OpenAI (Antigravity port)"
   },
-  "repository": "https://github.com/openai/codex-plugin-cc",
+  "repository": "https://github.com/hjyker/codex-plugin-agy",
   "suggestedPrompts": [
     "/codex-review --background",
     "/codex-adversarial-review --base main",
