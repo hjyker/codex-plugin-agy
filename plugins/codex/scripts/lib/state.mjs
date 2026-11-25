@@ -6,9 +6,12 @@ import path from "node:path";
 import { resolveWorkspaceRoot } from "./workspace.mjs";
 
 const STATE_VERSION = 1;
+const CODEX_PLUGIN_DATA_ENV = "CODEX_PLUGIN_DATA";
 const PLUGIN_DATA_ENV = "CLAUDE_PLUGIN_DATA";
+const AGY_PLUGIN_DATA_ENV = "PLUGIN_DATA";
 const FALLBACK_STATE_ROOT_DIR = path.join(os.tmpdir(), "codex-companion");
 const STATE_FILE_NAME = "state.json";
+const ACTIVE_SESSION_FILE_NAME = "session.json";
 const JOBS_DIR_NAME = "jobs";
 const MAX_JOBS = 50;
 
@@ -38,13 +41,43 @@ export function resolveStateDir(cwd) {
   const slugSource = path.basename(workspaceRoot) || "workspace";
   const slug = slugSource.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "workspace";
   const hash = createHash("sha256").update(canonicalWorkspaceRoot).digest("hex").slice(0, 16);
-  const pluginDataDir = process.env[PLUGIN_DATA_ENV];
+  const pluginDataDir =
+    process.env[CODEX_PLUGIN_DATA_ENV] ||
+    process.env[PLUGIN_DATA_ENV] ||
+    process.env[AGY_PLUGIN_DATA_ENV];
   const stateRoot = pluginDataDir ? path.join(pluginDataDir, "state") : FALLBACK_STATE_ROOT_DIR;
   return path.join(stateRoot, `${slug}-${hash}`);
 }
 
 export function resolveStateFile(cwd) {
   return path.join(resolveStateDir(cwd), STATE_FILE_NAME);
+}
+
+export function resolveActiveSessionFile(cwd) {
+  return path.join(resolveStateDir(cwd), ACTIVE_SESSION_FILE_NAME);
+}
+
+export function saveActiveSession(cwd, session) {
+  ensureStateDir(cwd);
+  const payload = {
+    sessionId: session?.sessionId ?? null,
+    transcriptPath: session?.transcriptPath ?? null,
+    updatedAt: nowIso()
+  };
+  fs.writeFileSync(resolveActiveSessionFile(cwd), `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+  return payload;
+}
+
+export function loadActiveSession(cwd) {
+  const sessionFile = resolveActiveSessionFile(cwd);
+  if (!fs.existsSync(sessionFile)) {
+    return null;
+  }
+  try {
+    return JSON.parse(fs.readFileSync(sessionFile, "utf8"));
+  } catch {
+    return null;
+  }
 }
 
 export function resolveJobsDir(cwd) {

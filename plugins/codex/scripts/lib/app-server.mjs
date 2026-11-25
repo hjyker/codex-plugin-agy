@@ -16,8 +16,20 @@ import { parseBrokerEndpoint } from "./broker-endpoint.mjs";
 import { ensureBrokerSession, loadBrokerSession } from "./broker-lifecycle.mjs";
 import { terminateProcessTree } from "./process.mjs";
 
-const PLUGIN_MANIFEST_URL = new URL("../../.claude-plugin/plugin.json", import.meta.url);
-const PLUGIN_MANIFEST = JSON.parse(fs.readFileSync(PLUGIN_MANIFEST_URL, "utf8"));
+function loadPluginManifest() {
+  const candidates = [
+    new URL("../../plugin.json", import.meta.url),
+    new URL("../../.claude-plugin/plugin.json", import.meta.url)
+  ];
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) {
+      return JSON.parse(fs.readFileSync(candidate, "utf8"));
+    }
+  }
+  return {};
+}
+
+const PLUGIN_MANIFEST = loadPluginManifest();
 
 export const BROKER_ENDPOINT_ENV = "CODEX_COMPANION_APP_SERVER_ENDPOINT";
 export const BROKER_BUSY_RPC_CODE = -32001;
@@ -25,7 +37,7 @@ export const BROKER_BUSY_RPC_CODE = -32001;
 /** @type {ClientInfo} */
 const DEFAULT_CLIENT_INFO = {
   title: "Codex Plugin",
-  name: "Claude Code",
+  name: "Antigravity",
   version: PLUGIN_MANIFEST.version ?? "0.0.0"
 };
 

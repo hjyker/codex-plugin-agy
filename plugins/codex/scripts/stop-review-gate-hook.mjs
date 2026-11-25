@@ -6,6 +6,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
+import { extractLastAssistantMessageFromTranscript } from "./lib/agy-transcript.mjs";
 import { getCodexAvailability } from "./lib/codex.mjs";
 import { loadPromptTemplate, interpolateTemplate } from "./lib/prompts.mjs";
 import { getConfig, listJobs } from "./lib/state.mjs";
@@ -17,6 +18,16 @@ const STOP_REVIEW_TIMEOUT_MS = 15 * 60 * 1000;
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const ROOT_DIR = path.resolve(SCRIPT_DIR, "..");
 const STOP_REVIEW_TASK_MARKER = "Run a stop-gate review of the previous Claude turn.";
+
+function isAgyHookInput(input = {}) {
+  return (
+    Object.prototype.hasOwnProperty.call(input, "conversationId") ||
+    Object.prototype.hasOwnProperty.call(input, "hookEventName") ||
+    Object.prototype.hasOwnProperty.call(input, "terminationReason") ||
+    Object.prototype.hasOwnProperty.call(input, "continuationActive") ||
+    Object.prototype.hasOwnProperty.call(input, "transcriptPath")
+  );
+}
 
 function readHookInput() {
   const raw = fs.readFileSync(0, "utf8").trim();
@@ -38,7 +49,7 @@ function logNote(message) {
 }
 
 function filterJobsForCurrentSession(jobs, input = {}) {
-  const sessionId = input.session_id || process.env[SESSION_ID_ENV] || null;
+  const sessionId = input.conversationId || input.session_id || process.env[SESSION_ID_ENV] || null;
   if (!sessionId) {
     return jobs;
   }
@@ -46,10 +57,12 @@ function filterJobsForCurrentSession(jobs, input = {}) {
 }
 
 function buildStopReviewPrompt(input = {}) {
-  const lastAssistantMessage = String(input.last_assistant_message ?? "").trim();
+  const lastAssistantMessage =
+    String(input.last_assistant_message ?? "").trim() ||
+    extractLastAssistantMessageFromTranscript(input.transcriptPath || input.transcript_path);
   const template = loadPromptTemplate(ROOT_DIR, "stop-review-gate");
   const claudeResponseBlock = lastAssistantMessage
-    ? ["Previous Claude response:", lastAssistantMessage].join("\n")
+    ? ["Previous assistant response:", lastAssistantMessage].join("\n")
     : "";
   return interpolateTemplate(template, {
     CLAUDE_RESPONSE_BLOCK: claudeResponseBlock
@@ -98,9 +111,10 @@ function parseStopReviewOutput(rawOutput) {
 function runStopReview(cwd, input = {}) {
   const scriptPath = path.join(SCRIPT_DIR, "codex-companion.mjs");
   const prompt = buildStopReviewPrompt(input);
+  const sessionId = input.conversationId || input.session_id || null;
   const childEnv = {
     ...process.env,
-    ...(input.session_id ? { [SESSION_ID_ENV]: input.session_id } : {})
+    ...(sessionId ? { [SESSION_ID_ENV]: sessionId } : {})
   };
   const result = spawnSync(process.execPath, [scriptPath, "task", "--json", prompt], {
     cwd,
@@ -141,18 +155,36 @@ function runStopReview(cwd, input = {}) {
 
 function main() {
   const input = readHookInput();
-  const cwd = input.cwd || process.env.CLAUDE_PROJECT_DIR || process.cwd();
+  const agyMode = isAgyHookInput(input);
+  const cwd = input.cwd || input.workspacePaths?.[0] || process.env.CLAUDE_PROJECT_DIR || process.cwd();
   const workspaceRoot = resolveWorkspaceRoot(cwd);
   const config = getConfig(workspaceRoot);
 
   const jobs = sortJobsNewestFirst(filterJobsForCurrentSession(listJobs(workspaceRoot), input));
   const runningJob = jobs.find((job) => job.status === "queued" || job.status === "running");
+  const statusCmd = agyMode ? "/codex-status" : "/codex:status";
+  const cancelCmd = agyMode ? "/codex-cancel" : "/codex:cancel";
   const runningTaskNote = runningJob
-    ? `Codex task ${runningJob.id} is still running. Check /codex:status and use /codex:cancel ${runningJob.id} if you want to stop it before ending the session.`
+    ? `Codex task ${runningJob.id} is still running. Check ${statusCmd} and use ${cancelCmd} ${runningJob.id} if you want to stop it before ending the session.`
     : null;
+
+  if (agyMode && input.terminationReason && input.terminationReason !== "NO_TOOL_CALL") {
+    logNote(runningTaskNote);
+    emitDecision({});
+    return;
+  }
+
+  if (agyMode && input.continuationActive) {
+    logNote(runningTaskNote);
+    emitDecision({});
+    return;
+  }
 
   if (!config.stopReviewGate) {
     logNote(runningTaskNote);
+    if (agyMode) {
+      emitDecision({});
+    }
     return;
   }
 
@@ -160,19 +192,25 @@ function main() {
   if (setupNote) {
     logNote(setupNote);
     logNote(runningTaskNote);
+    if (agyMode) {
+      emitDecision({});
+    }
     return;
   }
 
   const review = runStopReview(cwd, input);
   if (!review.ok) {
     emitDecision({
-      decision: "block",
+      decision: agyMode ? "continue" : "block",
       reason: runningTaskNote ? `${runningTaskNote} ${review.reason}` : review.reason
     });
     return;
   }
 
   logNote(runningTaskNote);
+  if (agyMode) {
+    emitDecision({});
+  }
 }
 
 try {

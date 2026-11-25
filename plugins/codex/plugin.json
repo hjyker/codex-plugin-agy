@@ -1,0 +1,15 @@
+{
+  "name": "codex-plugin-agy",
+  "displayName": "Codex Companion",
+  "version": "1.0.6",
+  "description": "Use OpenAI Codex from Antigravity for read-only code reviews, adversarial reviews, rescue tasks, and session handoffs.",
+  "author": {
+    "name": "OpenAI (Antigravity port)"
+  },
+  "repository": "https://github.com/openai/codex-plugin-cc",
+  "suggestedPrompts": [
+    "/codex-review --background",
+    "/codex-adversarial-review --base main",
+    "/codex-setup"
+  ]
+}

@@ -44,7 +44,7 @@ import { BROKER_BUSY_RPC_CODE, BROKER_ENDPOINT_ENV, CodexAppServerClient } from 
 import { loadBrokerSession } from "./broker-lifecycle.mjs";
 import { binaryAvailable } from "./process.mjs";
 
-const SERVICE_NAME = "claude_code_codex_plugin";
+const SERVICE_NAME = "antigravity_codex_plugin";
 const TASK_THREAD_PREFIX = "Codex Companion Task";
 const DEFAULT_CONTINUE_PROMPT =
   "Continue from the current thread state. Pick the next highest-value step and follow through until the task is resolved.";
@@ -64,6 +64,7 @@ function buildThreadParams(cwd, options = {}) {
   return {
     cwd,
     model: options.model ?? null,
+    ...(options.serviceTier ? { serviceTier: options.serviceTier } : {}),
     approvalPolicy: options.approvalPolicy ?? "never",
     sandbox: options.sandbox ?? "read-only",
     serviceName: SERVICE_NAME,
@@ -77,6 +78,7 @@ function buildResumeParams(threadId, cwd, options = {}) {
     threadId,
     cwd,
     model: options.model ?? null,
+    ...(options.serviceTier ? { serviceTier: options.serviceTier } : {}),
     approvalPolicy: options.approvalPolicy ?? "never",
     sandbox: options.sandbox ?? "read-only"
   };
@@ -1009,6 +1011,7 @@ export async function runAppServerReview(cwd, options = {}) {
     emitProgress(options.onProgress, "Starting Codex review thread.", "starting");
     const thread = await startThread(client, cwd, {
       model: options.model,
+      serviceTier: options.serviceTier,
       sandbox: "read-only",
       ephemeral: true,
       threadName: options.threadName
@@ -1105,6 +1108,7 @@ export async function runAppServerTurn(cwd, options = {}) {
       emitProgress(options.onProgress, `Resuming thread ${options.resumeThreadId}.`, "starting");
       const response = await resumeThread(client, options.resumeThreadId, cwd, {
         model: options.model,
+        serviceTier: options.serviceTier,
         sandbox: options.sandbox,
         ephemeral: false
       });
@@ -1113,6 +1117,7 @@ export async function runAppServerTurn(cwd, options = {}) {
       emitProgress(options.onProgress, "Starting Codex task thread.", "starting");
       const response = await startThread(client, cwd, {
         model: options.model,
+        serviceTier: options.serviceTier,
         sandbox: options.sandbox,
         ephemeral: options.persistThread ? false : true,
         threadName: options.persistThread ? options.threadName : options.threadName ?? null
@@ -1137,6 +1142,7 @@ export async function runAppServerTurn(cwd, options = {}) {
           threadId,
           input: buildTurnInput(prompt),
           model: options.model ?? null,
+          ...(options.serviceTier ? { serviceTier: options.serviceTier } : {}),
           effort: options.effort ?? null,
           outputSchema: options.outputSchema ?? null
         }),

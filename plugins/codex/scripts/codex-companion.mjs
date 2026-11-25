@@ -6,7 +6,14 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 
+import { extractAgyTranscriptHandoff } from "./lib/agy-transcript.mjs";
 import { parseArgs, splitRawArgumentString } from "./lib/args.mjs";
+import {
+  clearBrokerSession,
+  loadBrokerSession,
+  sendBrokerShutdown,
+  teardownBrokerSession
+} from "./lib/broker-lifecycle.mjs";
 import {
     buildPersistentTaskThreadName,
     DEFAULT_CONTINUE_PROMPT,
@@ -30,6 +37,7 @@ import {
   generateJobId,
   getConfig,
   listJobs,
+  loadActiveSession,
   setConfig,
   upsertJob,
   writeJobFile
@@ -68,7 +76,8 @@ const ROOT_DIR = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 const REVIEW_SCHEMA = path.join(ROOT_DIR, "schemas", "review-output.schema.json");
 const DEFAULT_STATUS_WAIT_TIMEOUT_MS = 240000;
 const DEFAULT_STATUS_POLL_INTERVAL_MS = 2000;
-const VALID_REASONING_EFFORTS = new Set(["none", "minimal", "low", "medium", "high", "xhigh"]);
+const VALID_REASONING_EFFORTS = new Set(["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]);
+const VALID_SANDBOX_MODES = new Set(["read-only", "workspace-write", "danger-full-access"]);
 const MODEL_ALIASES = new Map([["spark", "gpt-5.3-codex-spark"]]);
 const STOP_REVIEW_TASK_MARKER = "Run a stop-gate review of the previous Claude turn.";
 
@@ -76,14 +85,15 @@ function printUsage() {
   console.log(
     [
       "Usage:",
-      "  node scripts/codex-companion.mjs setup [--enable-review-gate|--disable-review-gate] [--json]",
-      "  node scripts/codex-companion.mjs review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>]",
-      "  node scripts/codex-companion.mjs adversarial-review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>] [focus text]",
-      "  node scripts/codex-companion.mjs task [--background] [--write] [--resume-last|--resume|--fresh] [--model <model|spark>] [--effort <none|minimal|low|medium|high|xhigh>] [prompt]",
-      "  node scripts/codex-companion.mjs transfer [--source <claude-jsonl>] [--json]",
-      "  node scripts/codex-companion.mjs status [job-id] [--all] [--json]",
-      "  node scripts/codex-companion.mjs result [job-id] [--json]",
-      "  node scripts/codex-companion.mjs cancel [job-id] [--json]"
+      "  codex-companion setup [--enable-review-gate|--disable-review-gate] [--json]",
+      "  codex-companion review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>] [--model <model>] [--service-tier <tier>]",
+      "  codex-companion adversarial-review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>] [--model <model>] [--effort <level>] [--service-tier <tier>] [focus text]",
+      "  codex-companion task [--background] [--write] [--sandbox <read-only|workspace-write|danger-full-access>] [--resume-last|--resume|--thread-id <id>|--fresh] [--model <model|spark>] [--effort <none|minimal|low|medium|high|xhigh|max|ultra>] [--service-tier <tier>] [--prompt-file <path>] [prompt]",
+      "  codex-companion transfer [--handoff <text>|--handoff-file <path>|--source <jsonl>] [--title <name>] [--model <model>] [--json]",
+      "  codex-companion status [job-id] [--all] [--json]",
+      "  codex-companion result [job-id] [--json]",
+      "  codex-companion cancel [job-id] [--json]",
+      "  codex-companion broker-stop [--cwd <dir>] [--json]"
     ].join("\n")
   );
 }
@@ -121,10 +131,34 @@ function normalizeReasoningEffort(effort) {
   }
   if (!VALID_REASONING_EFFORTS.has(normalized)) {
     throw new Error(
-      `Unsupported reasoning effort "${effort}". Use one of: none, minimal, low, medium, high, xhigh.`
+      `Unsupported reasoning effort "${effort}". Use one of: none, minimal, low, medium, high, xhigh, max, ultra.`
     );
   }
   return normalized;
+}
+
+function normalizeSandboxMode(sandbox) {
+  if (sandbox == null) {
+    return null;
+  }
+  const normalized = String(sandbox).trim().toLowerCase();
+  if (!normalized) {
+    return null;
+  }
+  if (!VALID_SANDBOX_MODES.has(normalized)) {
+    throw new Error(
+      `Unsupported sandbox mode "${sandbox}". Use one of: read-only, workspace-write, danger-full-access.`
+    );
+  }
+  return normalized;
+}
+
+function normalizeServiceTier(serviceTier) {
+  if (serviceTier == null) {
+    return null;
+  }
+  const normalized = String(serviceTier).trim();
+  return normalized || null;
 }
 
 function normalizeArgv(argv) {
@@ -370,6 +404,7 @@ async function executeReviewRun(request) {
     const result = await runAppServerReview(request.cwd, {
       target: reviewTarget,
       model: request.model,
+      serviceTier: request.serviceTier,
       onProgress: request.onProgress
     });
     const payload = {
@@ -411,6 +446,8 @@ async function executeReviewRun(request) {
   const result = await runAppServerTurn(context.repoRoot, {
     prompt,
     model: request.model,
+    effort: request.effort,
+    serviceTier: request.serviceTier,
     sandbox: "read-only",
     outputSchema: readOutputSchema(REVIEW_SCHEMA),
     onProgress: request.onProgress
@@ -464,11 +501,11 @@ async function executeTaskRun(request) {
 
   const taskMetadata = buildTaskRunMetadata({
     prompt: request.prompt,
-    resumeLast: request.resumeLast
+    resumeLast: Boolean(request.resumeLast || request.threadId)
   });
 
-  let resumeThreadId = null;
-  if (request.resumeLast) {
+  let resumeThreadId = request.threadId ? String(request.threadId).trim() : null;
+  if (!resumeThreadId && request.resumeLast) {
     const latestThread = await resolveLatestTrackedTaskThread(workspaceRoot, {
       excludeJobId: request.jobId
     });
@@ -479,8 +516,11 @@ async function executeTaskRun(request) {
   }
 
   if (!request.prompt && !resumeThreadId) {
-    throw new Error("Provide a prompt, a prompt file, piped stdin, or use --resume-last.");
+    throw new Error("Provide a prompt, a prompt file, piped stdin, --thread-id, or use --resume-last.");
   }
+
+  const resolvedSandbox = request.sandbox ?? (request.write ? "workspace-write" : "read-only");
+  const isWriteMode = resolvedSandbox !== "read-only";
 
   const result = await runAppServerTurn(workspaceRoot, {
     resumeThreadId,
@@ -488,7 +528,8 @@ async function executeTaskRun(request) {
     defaultPrompt: resumeThreadId ? DEFAULT_CONTINUE_PROMPT : "",
     model: request.model,
     effort: request.effort,
-    sandbox: request.write ? "workspace-write" : "read-only",
+    serviceTier: request.serviceTier,
+    sandbox: resolvedSandbox,
     onProgress: request.onProgress,
     persistThread: true,
     threadName: resumeThreadId ? null : buildPersistentTaskThreadName(request.prompt || DEFAULT_CONTINUE_PROMPT)
@@ -505,12 +546,13 @@ async function executeTaskRun(request) {
     {
       title: taskMetadata.title,
       jobId: request.jobId ?? null,
-      write: Boolean(request.write)
+      write: isWriteMode
     }
   );
   const payload = {
     status: result.status,
     threadId: result.threadId,
+    sandbox: resolvedSandbox,
     rawOutput,
     touchedFiles: result.touchedFiles,
     reasoningSummary: result.reasoningSummary
@@ -525,7 +567,7 @@ async function executeTaskRun(request) {
     summary: firstMeaningfulLine(rawOutput, firstMeaningfulLine(failureMessage, `${taskMetadata.title} finished.`)),
     jobTitle: taskMetadata.title,
     jobClass: "task",
-    write: Boolean(request.write)
+    write: isWriteMode
   };
 }
 
@@ -601,37 +643,122 @@ function buildTaskJob(workspaceRoot, taskMetadata, write) {
   });
 }
 
-function buildTaskRequest({ cwd, model, effort, prompt, write, resumeLast, jobId }) {
+function buildTaskRequest({ cwd, model, effort, serviceTier, prompt, write, sandbox, resumeLast, threadId, jobId }) {
   return {
     cwd,
     model,
     effort,
+    serviceTier,
     prompt,
     write,
+    sandbox,
     resumeLast,
+    threadId,
     jobId
   };
 }
 
 function renderTransferResult(payload) {
+  const heading =
+    payload.mode === "handoff"
+      ? "Transferred the Antigravity session context into a persistent Codex thread."
+      : "Transferred the Claude session into a Codex thread with visible turn history.";
   const lines = [
-    "Transferred the Claude session into a Codex thread with visible turn history.",
+    heading,
     `Codex session ID: ${payload.threadId}`,
     `Resume in Codex: ${payload.resumeCommand}`
   ];
+  if (payload.acknowledgment) {
+    lines.push("", "Codex handoff summary:", payload.acknowledgment);
+  }
   return `${lines.join("\n")}\n`;
 }
 
+function buildAgyHandoffPrompt(handoffBody) {
+  return [
+    "<task>",
+    "You are receiving a session context handoff from Antigravity so the user can resume this work directly in Codex.",
+    "Do NOT edit files, do NOT run shell commands, and do NOT start implementing yet.",
+    "Acknowledge the handoff in 2-4 concise bullet points summarizing the goal, current state, and immediate next step, and confirm you are ready when the user resumes this thread.",
+    "</task>",
+    "",
+    "<handoff_context>",
+    handoffBody.trim(),
+    "</handoff_context>"
+  ].join("\n");
+}
+
+function readTransferHandoffBody(cwd, options = {}) {
+  if (options.handoffFile) {
+    return fs.readFileSync(path.resolve(cwd, options.handoffFile), "utf8").trim();
+  }
+  if (options.handoff) {
+    return String(options.handoff).trim();
+  }
+  const piped = readStdinIfPiped().trim();
+  if (piped) {
+    return piped;
+  }
+  return "";
+}
+
 async function executeTransfer(cwd, options = {}) {
-  const sourcePath = resolveClaudeSessionPath(cwd, {
-    source: options.source
+  const workspaceRoot = resolveWorkspaceRoot(cwd);
+  const explicitHandoff = readTransferHandoffBody(cwd, options);
+  const hasExplicitClaudeSource = Boolean(options.source);
+
+  if (!explicitHandoff && (hasExplicitClaudeSource || process.env.CODEX_COMPANION_TRANSCRIPT_PATH)) {
+    const sourcePath = resolveClaudeSessionPath(cwd, {
+      source: options.source
+    });
+    const result = await importExternalAgentSession(cwd, { sourcePath });
+    const payload = {
+      mode: "claude-import",
+      threadId: result.threadId,
+      resumeCommand: `codex resume ${result.threadId}`,
+      sourcePath,
+      sessionId: path.basename(sourcePath, ".jsonl")
+    };
+
+    return {
+      payload,
+      rendered: renderTransferResult(payload)
+    };
+  }
+
+  const activeSession = loadActiveSession(workspaceRoot);
+  const handoffBody =
+    explicitHandoff ||
+    (activeSession?.transcriptPath ? extractAgyTranscriptHandoff(activeSession.transcriptPath) : "");
+
+  if (!handoffBody) {
+    throw new Error(
+      "Could not identify session context to transfer. Provide --handoff <summary>, --handoff-file <path>, piped stdin, or --source <path-to-claude-jsonl>."
+    );
+  }
+
+  ensureCodexAvailable(cwd);
+  const threadTitle = options.title
+    ? `Antigravity Handoff: ${shorten(options.title, 56)}`
+    : `Antigravity Handoff: ${shorten(firstMeaningfulLine(handoffBody, path.basename(workspaceRoot)), 56)}`;
+  const result = await runAppServerTurn(workspaceRoot, {
+    prompt: buildAgyHandoffPrompt(handoffBody),
+    model: normalizeRequestedModel(options.model),
+    sandbox: "read-only",
+    persistThread: true,
+    threadName: threadTitle
   });
-  const result = await importExternalAgentSession(cwd, { sourcePath });
+  if (result.status !== 0 || !result.threadId) {
+    throw new Error(result.error?.message || result.stderr || "Codex handoff turn failed.");
+  }
+
   const payload = {
+    mode: "handoff",
     threadId: result.threadId,
     resumeCommand: `codex resume ${result.threadId}`,
-    sourcePath,
-    sessionId: path.basename(sourcePath, ".jsonl")
+    title: threadTitle,
+    sessionId: activeSession?.sessionId ?? null,
+    acknowledgment: (result.finalMessage || "").trim()
   };
 
   return {
@@ -710,8 +837,12 @@ function enqueueBackgroundTask(cwd, job, request) {
 }
 
 async function handleReviewCommand(argv, config) {
+  const valueOptions = ["base", "scope", "model", "service-tier", "cwd"];
+  if (config.allowEffort) {
+    valueOptions.push("effort");
+  }
   const { options, positionals } = parseCommandInput(argv, {
-    valueOptions: ["base", "scope", "model", "cwd"],
+    valueOptions,
     booleanOptions: ["json", "background", "wait"],
     aliasMap: {
       m: "model"
@@ -720,6 +851,9 @@ async function handleReviewCommand(argv, config) {
 
   const cwd = resolveCommandCwd(options);
   const workspaceRoot = resolveCommandWorkspace(options);
+  const model = normalizeRequestedModel(options.model);
+  const effort = config.allowEffort ? normalizeReasoningEffort(options.effort) : null;
+  const serviceTier = normalizeServiceTier(options["service-tier"]);
   const focusText = positionals.join(" ").trim();
   const target = resolveReviewTarget(cwd, {
     base: options.base,
@@ -743,7 +877,9 @@ async function handleReviewCommand(argv, config) {
         cwd,
         base: options.base,
         scope: options.scope,
-        model: options.model,
+        model,
+        effort,
+        serviceTier,
         focusText,
         reviewName: config.reviewName,
         onProgress: progress
@@ -755,13 +891,14 @@ async function handleReviewCommand(argv, config) {
 async function handleReview(argv) {
   return handleReviewCommand(argv, {
     reviewName: "Review",
+    allowEffort: false,
     validateRequest: validateNativeReviewRequest
   });
 }
 
 async function handleTask(argv) {
   const { options, positionals } = parseCommandInput(argv, {
-    valueOptions: ["model", "effort", "cwd", "prompt-file"],
+    valueOptions: ["model", "effort", "service-tier", "sandbox", "thread-id", "cwd", "prompt-file"],
     booleanOptions: ["json", "write", "resume-last", "resume", "fresh", "background"],
     aliasMap: {
       m: "model"
@@ -772,31 +909,38 @@ async function handleTask(argv) {
   const workspaceRoot = resolveCommandWorkspace(options);
   const model = normalizeRequestedModel(options.model);
   const effort = normalizeReasoningEffort(options.effort);
+  const serviceTier = normalizeServiceTier(options["service-tier"]);
+  const explicitSandbox = normalizeSandboxMode(options.sandbox);
+  const threadId = options["thread-id"] ? String(options["thread-id"]).trim() : null;
   const prompt = readTaskPrompt(cwd, options, positionals);
 
   const resumeLast = Boolean(options["resume-last"] || options.resume);
   const fresh = Boolean(options.fresh);
-  if (resumeLast && fresh) {
-    throw new Error("Choose either --resume/--resume-last or --fresh.");
+  if ((resumeLast || threadId) && fresh) {
+    throw new Error("Choose either --resume/--resume-last/--thread-id or --fresh.");
   }
-  const write = Boolean(options.write);
+  const sandbox = explicitSandbox ?? (options.write ? "workspace-write" : "read-only");
+  const write = sandbox !== "read-only";
   const taskMetadata = buildTaskRunMetadata({
     prompt,
-    resumeLast
+    resumeLast: Boolean(resumeLast || threadId)
   });
 
   if (options.background) {
     ensureCodexAvailable(cwd);
-    requireTaskRequest(prompt, resumeLast);
+    requireTaskRequest(prompt, Boolean(resumeLast || threadId));
 
     const job = buildTaskJob(workspaceRoot, taskMetadata, write);
     const request = buildTaskRequest({
       cwd,
       model,
       effort,
+      serviceTier,
       prompt,
       write,
+      sandbox,
       resumeLast,
+      threadId,
       jobId: job.id
     });
     const { payload } = enqueueBackgroundTask(cwd, job, request);
@@ -812,9 +956,12 @@ async function handleTask(argv) {
         cwd,
         model,
         effort,
+        serviceTier,
         prompt,
         write,
+        sandbox,
         resumeLast,
+        threadId,
         jobId: job.id,
         onProgress: progress
       }),
@@ -823,16 +970,53 @@ async function handleTask(argv) {
 }
 
 async function handleTransfer(argv) {
-  const { options } = parseCommandInput(argv, {
-    valueOptions: ["cwd", "source"],
-    booleanOptions: ["json"]
+  const { options, positionals } = parseCommandInput(argv, {
+    valueOptions: ["cwd", "source", "handoff", "handoff-file", "title", "model"],
+    booleanOptions: ["json"],
+    aliasMap: {
+      m: "model"
+    }
   });
 
   const cwd = resolveCommandCwd(options);
+  const positionalHandoff = positionals.join(" ").trim();
   const { payload, rendered } = await executeTransfer(cwd, {
-    source: options.source
+    source: options.source,
+    handoff: options.handoff ?? (positionalHandoff || undefined),
+    handoffFile: options["handoff-file"],
+    title: options.title,
+    model: options.model
   });
   outputCommandResult(payload, rendered, options.json);
+}
+
+async function handleBrokerStop(argv) {
+  const { options } = parseCommandInput(argv, {
+    valueOptions: ["cwd"],
+    booleanOptions: ["json"]
+  });
+  const cwd = resolveCommandCwd(options);
+  const workspaceRoot = resolveCommandWorkspace(options);
+  const brokerSession = loadBrokerSession(workspaceRoot);
+  if (!brokerSession) {
+    const payload = { stopped: false, workspaceRoot, detail: "No active broker session found." };
+    outputCommandResult(payload, "No active Codex broker session found.\n", options.json);
+    return;
+  }
+  if (brokerSession.endpoint) {
+    await sendBrokerShutdown(brokerSession.endpoint);
+  }
+  teardownBrokerSession({
+    endpoint: brokerSession.endpoint ?? null,
+    pidFile: brokerSession.pidFile ?? null,
+    logFile: brokerSession.logFile ?? null,
+    sessionDir: brokerSession.sessionDir ?? null,
+    pid: brokerSession.pid ?? null,
+    killProcess: terminateProcessTree
+  });
+  clearBrokerSession(workspaceRoot);
+  const payload = { stopped: true, workspaceRoot, pid: brokerSession.pid ?? null };
+  outputCommandResult(payload, `Stopped Codex broker for ${workspaceRoot}.\n`, options.json);
 }
 
 async function handleTaskWorker(argv) {
@@ -1037,7 +1221,8 @@ async function main() {
       break;
     case "adversarial-review":
       await handleReviewCommand(argv, {
-        reviewName: "Adversarial Review"
+        reviewName: "Adversarial Review",
+        allowEffort: true
       });
       break;
     case "task":
@@ -1060,6 +1245,9 @@ async function main() {
       break;
     case "cancel":
       await handleCancel(argv);
+      break;
+    case "broker-stop":
+      await handleBrokerStop(argv);
       break;
     default:
       throw new Error(`Unknown subcommand: ${subcommand}`);

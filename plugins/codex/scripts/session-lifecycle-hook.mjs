@@ -13,12 +13,21 @@ import {
   sendBrokerShutdown,
   teardownBrokerSession
 } from "./lib/broker-lifecycle.mjs";
-import { loadState, resolveStateFile, saveState } from "./lib/state.mjs";
+import { loadState, resolveStateFile, saveActiveSession, saveState } from "./lib/state.mjs";
 import { TRANSCRIPT_PATH_ENV } from "./lib/claude-session-transfer.mjs";
 import { resolveWorkspaceRoot } from "./lib/workspace.mjs";
 
 export const SESSION_ID_ENV = "CODEX_COMPANION_SESSION_ID";
 const PLUGIN_DATA_ENV = "CLAUDE_PLUGIN_DATA";
+
+function isAgyHookInput(input = {}) {
+  return (
+    Object.prototype.hasOwnProperty.call(input, "conversationId") ||
+    Object.prototype.hasOwnProperty.call(input, "hookEventName") ||
+    Object.prototype.hasOwnProperty.call(input, "workspacePaths") ||
+    Object.prototype.hasOwnProperty.call(input, "transcriptPath")
+  );
+}
 
 function readHookInput() {
   const raw = fs.readFileSync(0, "utf8").trim();
@@ -75,13 +84,25 @@ function cleanupSessionJobs(cwd, sessionId) {
 }
 
 function handleSessionStart(input) {
-  appendEnvVar(SESSION_ID_ENV, input.session_id);
-  appendEnvVar(TRANSCRIPT_PATH_ENV, input.transcript_path);
+  const sessionId = input.conversationId || input.session_id || null;
+  const transcriptPath = input.transcriptPath || input.transcript_path || null;
+  const cwd = input.cwd || input.workspacePaths?.[0] || process.cwd();
+
+  appendEnvVar(SESSION_ID_ENV, sessionId);
+  appendEnvVar(TRANSCRIPT_PATH_ENV, transcriptPath);
   appendEnvVar(PLUGIN_DATA_ENV, process.env[PLUGIN_DATA_ENV]);
+
+  if (cwd && (sessionId || transcriptPath)) {
+    saveActiveSession(cwd, { sessionId, transcriptPath });
+  }
+
+  if (isAgyHookInput(input)) {
+    process.stdout.write("{}\n");
+  }
 }
 
 async function handleSessionEnd(input) {
-  const cwd = input.cwd || process.cwd();
+  const cwd = input.cwd || input.workspacePaths?.[0] || process.cwd();
   const brokerSession =
     loadBrokerSession(cwd) ??
     (process.env[BROKER_ENDPOINT_ENV]
@@ -101,7 +122,7 @@ async function handleSessionEnd(input) {
     await sendBrokerShutdown(brokerEndpoint);
   }
 
-  cleanupSessionJobs(cwd, input.session_id || process.env[SESSION_ID_ENV]);
+  cleanupSessionJobs(cwd, input.conversationId || input.session_id || process.env[SESSION_ID_ENV]);
   teardownBrokerSession({
     endpoint: brokerEndpoint,
     pidFile,
@@ -115,7 +136,7 @@ async function handleSessionEnd(input) {
 
 async function main() {
   const input = readHookInput();
-  const eventName = process.argv[2] ?? input.hook_event_name ?? "";
+  const eventName = process.argv[2] ?? input.hookEventName ?? input.hook_event_name ?? "";
 
   if (eventName === "SessionStart") {
     handleSessionStart(input);

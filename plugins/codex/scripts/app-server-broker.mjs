@@ -10,6 +10,19 @@ import { BROKER_BUSY_RPC_CODE, CodexAppServerClient } from "./lib/app-server.mjs
 import { parseBrokerEndpoint } from "./lib/broker-endpoint.mjs";
 
 const STREAMING_METHODS = new Set(["turn/start", "review/start", "thread/compact/start"]);
+const DEFAULT_IDLE_TIMEOUT_MS = 20 * 60 * 1000;
+
+function resolveIdleTimeoutMs() {
+  const raw = process.env.CODEX_BROKER_IDLE_TIMEOUT_MS;
+  if (raw == null || raw === "") {
+    return DEFAULT_IDLE_TIMEOUT_MS;
+  }
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return DEFAULT_IDLE_TIMEOUT_MS;
+  }
+  return parsed;
+}
 
 function buildStreamThreadIds(method, params, result) {
   const threadIds = new Set();
@@ -66,10 +79,37 @@ async function main() {
   writePidFile(pidFile);
 
   const appClient = await CodexAppServerClient.connect(cwd, { disableBroker: true });
+  const idleTimeoutMs = resolveIdleTimeoutMs();
   let activeRequestSocket = null;
   let activeStreamSocket = null;
   let activeStreamThreadIds = null;
+  let idleTimer = null;
+  let shuttingDown = false;
   const sockets = new Set();
+
+  function clearIdleTimer() {
+    if (idleTimer) {
+      clearTimeout(idleTimer);
+      idleTimer = null;
+    }
+  }
+
+  function scheduleIdleShutdown(server) {
+    clearIdleTimer();
+    if (idleTimeoutMs <= 0 || shuttingDown) {
+      return;
+    }
+    if (sockets.size > 0 || activeRequestSocket || activeStreamSocket) {
+      return;
+    }
+    idleTimer = setTimeout(async () => {
+      if (shuttingDown || sockets.size > 0 || activeRequestSocket || activeStreamSocket) {
+        return;
+      }
+      await shutdown(server);
+      process.exit(0);
+    }, idleTimeoutMs);
+  }
 
   function clearSocketOwnership(socket) {
     if (activeRequestSocket === socket) {
@@ -95,11 +135,17 @@ async function main() {
         if (activeRequestSocket === target) {
           activeRequestSocket = null;
         }
+        scheduleIdleShutdown(server);
       }
     }
   }
 
   async function shutdown(server) {
+    if (shuttingDown) {
+      return;
+    }
+    shuttingDown = true;
+    clearIdleTimer();
     for (const socket of sockets) {
       socket.end();
     }
@@ -116,6 +162,7 @@ async function main() {
   appClient.setNotificationHandler(routeNotification);
 
   const server = net.createServer((socket) => {
+    clearIdleTimer();
     sockets.add(socket);
     socket.setEncoding("utf8");
     let buffer = "";
@@ -225,11 +272,13 @@ async function main() {
     socket.on("close", () => {
       sockets.delete(socket);
       clearSocketOwnership(socket);
+      scheduleIdleShutdown(server);
     });
 
     socket.on("error", () => {
       sockets.delete(socket);
       clearSocketOwnership(socket);
+      scheduleIdleShutdown(server);
     });
   });
 
@@ -243,7 +292,9 @@ async function main() {
     process.exit(0);
   });
 
-  server.listen(listenTarget.path);
+  server.listen(listenTarget.path, () => {
+    scheduleIdleShutdown(server);
+  });
 }
 
 main().catch((error) => {
