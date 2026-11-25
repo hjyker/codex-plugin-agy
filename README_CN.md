@@ -30,9 +30,12 @@
 - **Node.js 18.18 或更高版本**
 - **OpenAI Codex CLI**（已通过 ChatGPT 订阅或 OpenAI API Key 登录）：
   ```bash
-  npm install -g @openai/codex
+  # macOS & Linux（官方独立安装脚本；重复执行即可更新）
+  curl -fsSL https://chatgpt.com/codex/install.sh | sh
   codex login
   ```
+  - Windows（PowerShell）：`powershell -ExecutionPolicy ByPass -c "irm https://chatgpt.com/codex/install.ps1 | iex"`
+  - 其他方式：`brew install --cask codex`（macOS）或 `npm install -g @openai/codex`
 
 ---
 
@@ -68,7 +71,7 @@ cd /opt/life/codex-plugin-agy
 
 对当前工作区未提交改动或分支差异执行标准只读代码审查（不修改任何文件，不自动修复）。
 
-- 支持参数：`[--wait|--background] [--base <ref>] [--scope auto|working-tree|branch] [--model <model>] [--service-tier <tier>]`
+- 支持参数：`[--wait|--background] [--base <ref>] [--scope auto|working-tree|branch] [--model <model>] [--service-tier <fast|flex>]`
 - 说明：底层映射至 Codex 原生 `review/start` RPC，不接收自定义 focus 文本或单次 `--effort`（推理强度遵循 Codex `config.toml`）；如需定向质疑或指定 `--effort`，请使用 `/codex-adversarial-review`。
 
 ```text
@@ -81,7 +84,7 @@ cd /opt/life/codex-plugin-agy
 
 发起可引导的**对抗式审查**（只读，不改代码），重点挑战实现方案、架构取舍、隐含假设、数据丢失、回滚与并发风险，返回结构化结论。
 
-- 支持参数：`[--wait|--background] [--base <ref>] [--scope auto|working-tree|branch] [--model <model>] [--effort <none|minimal|low|medium|high|xhigh|max|ultra>] [--service-tier <tier>] [focus ...]`
+- 支持参数：`[--wait|--background] [--base <ref>] [--scope auto|working-tree|branch] [--model <model>] [--effort <low|medium|high|xhigh|max|ultra>] [--service-tier <fast|flex>] [focus ...]`
 
 ```text
 /codex-adversarial-review
@@ -93,16 +96,16 @@ cd /opt/life/codex-plugin-agy
 
 把疑难排错、根因分析、定点修复或独立开发任务委派给 Codex 执行，并保留持久化 Thread 以便多轮续跑或切去 Codex CLI/App 接管。
 
-- 支持参数：`[--background|--wait] [--resume|--thread-id <id>|--fresh] [--sandbox read-only|workspace-write|danger-full-access] [--model <model|spark>] [--effort <none|minimal|low|medium|high|xhigh|max|ultra>] [--service-tier <tier>] [task]`
+- 支持参数：`[--background|--wait] [--resume|--thread-id <id>|--fresh] [--sandbox read-only|workspace-write|danger-full-access] [--model <model>] [--effort <low|medium|high|xhigh|max|ultra>] [--service-tier <fast|flex>] [task]`
 - 默认以可写模式（`workspace-write`）执行；仅做调研或只读诊断时可指定 `--sandbox read-only`；需调用宿主机 Docker 等环境时可指定 `--sandbox danger-full-access`。
 - `--resume` 自动续跑当前仓库最近一次任务线程；多任务并行时可用 `--thread-id <id>` 精确续跑指定线程；`--fresh` 强制开启全新线程。
-- `--model spark` 自动映射为 `gpt-5.3-codex-spark`；不传 `--model` / `--effort` 时沿用 Codex 默认配置。
+- 不传 `--model` / `--effort` 时沿用 Codex 默认配置；也可以指定本机 Codex CLI 支持的任意模型（如 `gpt-6.2-sol`、`gpt-6.2-astra`、`gpt-6.1-terra`、`gpt-6-luna`，具体可用模型与推理档位以当前账号与模型支持为准）。
 
 ```text
 /codex-rescue 排查单测偶发失败的根因并给出最小安全修复
 /codex-rescue --resume 按上述方案补齐边界单测
 /codex-rescue --thread-id thr_xxx --service-tier fast 继续完成剩余改造
-/codex-rescue --model gpt-5.4-mini --effort medium 诊断构建失败原因
+/codex-rescue --model gpt-6.2-astra --effort high 诊断构建失败原因
 /codex-rescue --background 重构认证中间件
 ```
 

@@ -1,6 +1,6 @@
 ---
 name: codex-rescue
-description: Delegate investigation, root-cause debugging, explicit fix requests, or follow-up coding work to Codex through the shared companion runtime. Invoke via /codex-rescue [--background|--wait] [--resume|--thread-id <id>|--fresh] [--sandbox read-only|workspace-write|danger-full-access] [--model <model|spark>] [--effort <none|minimal|low|medium|high|xhigh|max|ultra>] [--service-tier <tier>] [task].
+description: Delegate investigation, root-cause debugging, explicit fix requests, or follow-up coding work to Codex through the shared companion runtime. Invoke via /codex-rescue [--background|--wait] [--resume|--thread-id <id>|--fresh] [--sandbox read-only|workspace-write|danger-full-access] [--model <model>] [--effort <low|medium|high|xhigh|max|ultra>] [--service-tier <tier>] [task].
 ---
 
 # Codex Rescue (`/codex-rescue`)
@@ -14,7 +14,7 @@ Delegate a debugging, investigation, or implementation task to Codex via `codex-
    - `--background` / `--wait`: Antigravity execution control.
      - **Await automatic wakeup (default / `--wait` or autonomous follow-through)**: invoke foreground `codex-companion task` via `run_command` with `WaitMsBeforeAsync: 500` (or `10000` for quick tasks) and `NotificationTimeoutSeconds: 300`. Every 5 minutes if still running, run `codex-companion status` and post a concise 2-line live progress update; when finished, Antigravity wakes up automatically.
      - **Fire-and-forget detached background (`--background`)**: pass `--background` to `codex-companion task` so the turn returns immediately and the user can inspect via `/codex-status`, `/codex-result`, or `/codex-cancel`.
-   - `--model <model|spark>`, `--effort <none|minimal|low|medium|high|xhigh|max|ultra>`, `--service-tier <tier>`: runtime controls; leave unset unless explicitly requested. Map `spark` to `gpt-5.3-codex-spark`.
+   - `--model <model>`, `--effort <low|medium|high|xhigh|max|ultra>`, `--service-tier <fast|flex>`: runtime controls; leave unset unless explicitly requested.
    - `--sandbox <read-only|workspace-write|danger-full-access>`: explicit sandbox mode override. If omitted, default to `--write` (`workspace-write`) unless the user explicitly asks for read-only diagnosis/research without edits.
    - `--thread-id <id>`: resume a specific Codex thread ID directly (takes precedence over `--resume`).
 3. Resume detection:

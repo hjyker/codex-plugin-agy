@@ -134,8 +134,7 @@ test("rescue command absorbs continue semantics", () => {
   assert.match(agent, /Do not call `review`, `adversarial-review`, `status`, `result`, or `cancel`/i);
   assert.match(agent, /Leave `--effort` unset unless the user explicitly requests a specific reasoning effort/i);
   assert.match(agent, /Leave `--model` and `--service-tier` unset by default/i);
-  assert.match(agent, /If the user asks for `spark`, map that to `--model gpt-5\.3-codex-spark`/i);
-  assert.match(agent, /If the user asks for a concrete model name such as .*gpt-5\.4-mini.*, pass it through with `--model`/i);
+  assert.match(agent, /If the user asks for a concrete model name such as .*gpt-6\.2-sol.*, pass it through with `--model`/i);
   assert.match(agent, /Return the stdout of the `codex-companion` command exactly as-is/i);
   assert.match(agent, /gpt-5-4-prompting/);
   assert.match(agent, /only to tighten the user's request into a better Codex prompt/i);
@@ -153,8 +152,10 @@ test("rescue command absorbs continue semantics", () => {
   assert.match(runtimeSkill, /If the Bash call fails or Codex cannot be invoked, return nothing/i);
   assert.match(readme, /openai\/codex-plugin-cc/);
   assert.match(readme, /README_CN\.md/);
-  assert.match(readme, /--model gpt-5\.4-mini --effort medium/);
-  assert.match(readme, /`--model spark` maps to `gpt-5\.3-codex-spark`/i);
+  assert.match(readme, /curl -fsSL https:\/\/chatgpt\.com\/codex\/install\.sh \| sh/);
+  assert.match(readme, /--model gpt-6\.2-astra --effort high/);
+  assert.match(readme, /--effort <low\|medium\|high\|xhigh\|max\|ultra>/);
+  assert.doesNotMatch(readme, /gpt-5\.4-mini|gpt-5\.3-codex-spark|<none\|minimal/);
   assert.match(readme, /### `\/codex-setup`/);
   assert.match(readme, /### `\/codex-review`/);
   assert.match(readme, /### `\/codex-adversarial-review`/);

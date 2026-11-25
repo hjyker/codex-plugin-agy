@@ -25,7 +25,7 @@ Run a steerable adversarial Codex review through the shared plugin runtime (`tur
 
 ## Argument handling
 
-- Preserve the user's flags (`--wait`, `--background`, `--base <ref>`, `--scope auto|working-tree|branch`, `--model <model>`, `--effort <none|minimal|low|medium|high|xhigh|max|ultra>`, `--service-tier <tier>`) and focus text verbatim.
+- Preserve the user's flags (`--wait`, `--background`, `--base <ref>`, `--scope auto|working-tree|branch`, `--model <model>`, `--effort <low|medium|high|xhigh|max|ultra>`, `--service-tier <fast|flex>`) and focus text verbatim.
 - Do not weaken the adversarial framing or rewrite the user's focus text.
 - Supports working-tree review, branch review, `--base <ref>`, and optional custom focus text after flags. Does not support `--scope staged` or `--scope unstaged`.
 

@@ -86,9 +86,9 @@ function printUsage() {
     [
       "Usage:",
       "  codex-companion setup [--enable-review-gate|--disable-review-gate] [--json]",
-      "  codex-companion review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>] [--model <model>] [--service-tier <tier>]",
-      "  codex-companion adversarial-review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>] [--model <model>] [--effort <level>] [--service-tier <tier>] [focus text]",
-      "  codex-companion task [--background] [--write] [--sandbox <read-only|workspace-write|danger-full-access>] [--resume-last|--resume|--thread-id <id>|--fresh] [--model <model|spark>] [--effort <none|minimal|low|medium|high|xhigh|max|ultra>] [--service-tier <tier>] [--prompt-file <path>] [prompt]",
+      "  codex-companion review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>] [--model <model>] [--service-tier <fast|flex>]",
+      "  codex-companion adversarial-review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>] [--model <model>] [--effort <low|medium|high|xhigh|max|ultra>] [--service-tier <fast|flex>] [focus text]",
+      "  codex-companion task [--background] [--write] [--sandbox <read-only|workspace-write|danger-full-access>] [--resume-last|--resume|--thread-id <id>|--fresh] [--model <model>] [--effort <low|medium|high|xhigh|max|ultra>] [--service-tier <fast|flex>] [--prompt-file <path>] [prompt]",
       "  codex-companion transfer [--handoff <text>|--handoff-file <path>|--source <jsonl>] [--title <name>] [--model <model>] [--json]",
       "  codex-companion status [job-id] [--all] [--json]",
       "  codex-companion result [job-id] [--json]",
@@ -223,7 +223,7 @@ async function buildSetupReport(cwd, actionsTaken = []) {
 
   const nextSteps = [];
   if (!codexStatus.available) {
-    nextSteps.push("Install Codex with `npm install -g @openai/codex`.");
+    nextSteps.push("Install Codex with `curl -fsSL https://chatgpt.com/codex/install.sh | sh` (or `npm install -g @openai/codex`).");
   }
   if (codexStatus.available && !authStatus.loggedIn && authStatus.requiresOpenaiAuth) {
     nextSteps.push("Run `!codex login`.");
@@ -286,7 +286,7 @@ function buildAdversarialReviewPrompt(context, focusText) {
 function ensureCodexAvailable(cwd) {
   const availability = getCodexAvailability(cwd);
   if (!availability.available) {
-    throw new Error("Codex CLI is not installed or is missing required runtime support. Install it with `npm install -g @openai/codex`, then rerun `/codex:setup`.");
+    throw new Error("Codex CLI is not installed or is missing required runtime support. Install it with `curl -fsSL https://chatgpt.com/codex/install.sh | sh`, then rerun `/codex-setup`.");
   }
 }
 

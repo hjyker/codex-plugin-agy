@@ -30,9 +30,12 @@ Once installed, all 8 slash commands are available across every project in both 
 - **Node.js 18.18 or later**
 - **OpenAI Codex CLI** authenticated with a ChatGPT subscription or OpenAI API key:
   ```bash
-  npm install -g @openai/codex
+  # macOS & Linux (official standalone installer; re-run to update)
+  curl -fsSL https://chatgpt.com/codex/install.sh | sh
   codex login
   ```
+  - Windows (PowerShell): `powershell -ExecutionPolicy ByPass -c "irm https://chatgpt.com/codex/install.ps1 | iex"`
+  - Alternatives: `brew install --cask codex` (macOS) or `npm install -g @openai/codex`
 
 ---
 
@@ -68,7 +71,7 @@ When Antigravity first asks for non-sandboxed execution permission for `codex-co
 
 Run a read-only code review on uncommitted changes or against a base branch. Never edits code.
 
-- Flags: `[--wait|--background] [--base <ref>] [--scope auto|working-tree|branch] [--model <model>] [--service-tier <tier>]`
+- Flags: `[--wait|--background] [--base <ref>] [--scope auto|working-tree|branch] [--model <model>] [--service-tier <fast|flex>]`
 - Uses Codex's native `review/start` RPC, which does not accept custom focus text or per-call `--effort` (effort follows your Codex `config.toml`). Use `/codex-adversarial-review` when you want custom focus instructions or `--effort`.
 
 ```text
@@ -81,7 +84,7 @@ Run a read-only code review on uncommitted changes or against a base branch. Nev
 
 Run a steerable, skeptical read-only review that stress-tests assumptions, edge cases, race conditions, data loss, and rollback risks. Returns structured findings and never auto-fixes.
 
-- Flags: `[--wait|--background] [--base <ref>] [--scope auto|working-tree|branch] [--model <model>] [--effort <none|minimal|low|medium|high|xhigh|max|ultra>] [--service-tier <tier>] [focus ...]`
+- Flags: `[--wait|--background] [--base <ref>] [--scope auto|working-tree|branch] [--model <model>] [--effort <low|medium|high|xhigh|max|ultra>] [--service-tier <fast|flex>] [focus ...]`
 
 ```text
 /codex-adversarial-review
@@ -93,16 +96,16 @@ Run a steerable, skeptical read-only review that stress-tests assumptions, edge 
 
 Delegate debugging, root-cause analysis, or implementation work to Codex via a persistent thread.
 
-- Flags: `[--background|--wait] [--resume|--thread-id <id>|--fresh] [--sandbox read-only|workspace-write|danger-full-access] [--model <model|spark>] [--effort <none|minimal|low|medium|high|xhigh|max|ultra>] [--service-tier <tier>] [task]`
+- Flags: `[--background|--wait] [--resume|--thread-id <id>|--fresh] [--sandbox read-only|workspace-write|danger-full-access] [--model <model>] [--effort <low|medium|high|xhigh|max|ultra>] [--service-tier <fast|flex>] [task]`
 - Defaults to `workspace-write`; pass `--sandbox read-only` for diagnosis-only runs or `--sandbox danger-full-access` when container/host tools are required.
 - `--resume` continues the latest task thread in the current repo; `--thread-id <id>` targets an exact thread; `--fresh` forces a new thread.
-- `--model spark` maps to `gpt-5.3-codex-spark`. Leave `--model` and `--effort` unset to use your Codex defaults.
+- Leave `--model` and `--effort` unset to use your Codex defaults, or pass any model available in your Codex CLI (for example `gpt-6.2-sol`, `gpt-6.2-astra`, `gpt-6.1-terra`, or `gpt-6-luna`; availability and supported reasoning levels depend on your account and model).
 
 ```text
 /codex-rescue investigate why the integration tests are flaky
 /codex-rescue --resume apply the top fix and add a regression test
 /codex-rescue --thread-id thr_xxx --service-tier fast finish the remaining migration
-/codex-rescue --model gpt-5.4-mini --effort medium diagnose the build failure
+/codex-rescue --model gpt-6.2-astra --effort high diagnose the build failure
 /codex-rescue --background refactor the auth middleware
 ```
 
