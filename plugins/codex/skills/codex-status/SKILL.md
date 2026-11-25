@@ -10,7 +10,7 @@ Inspect active and recent Codex background jobs for the current repository.
 
 ## Steps
 
-1. Run `codex-companion status` (forwarding `[job-id]`, `--wait`, `--timeout-ms <ms>`, `--all` if supplied) as a standalone `run_command` (retry with `BypassSandbox: true` if sandbox blocks access to `~/.codex-plugin-agy`).
+1. Run this plugin's bundled `../../scripts/codex-companion` script (resolved from this skill directory to its literal absolute path, e.g. `<plugin-root>/scripts/codex-companion`) with `status` (forwarding `[job-id]`, `--wait`, `--timeout-ms <ms>`, `--all` if supplied) as a standalone `run_command` (no `$HOME` expansion or shell chaining; retry with `BypassSandbox: true` if sandbox blocks access to `~/.codex-plugin-agy`).
 
 ## Output rules
 

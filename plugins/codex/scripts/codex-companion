@@ -1,0 +1,9 @@
+#!/usr/bin/env sh
+set -eu
+
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+export PATH="${HOME}/.local/bin:${PATH}"
+: "${CODEX_PLUGIN_DATA:=${PLUGIN_DATA:-${HOME}/.codex-plugin-agy}}"
+export CODEX_PLUGIN_DATA
+
+exec node "${SCRIPT_DIR}/codex-companion.mjs" "$@"

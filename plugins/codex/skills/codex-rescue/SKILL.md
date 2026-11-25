@@ -19,7 +19,7 @@ Delegate a debugging, investigation, or implementation task to Codex via `codex-
    - `--thread-id <id>`: resume a specific Codex thread ID directly (takes precedence over `--resume`).
 3. Resume detection:
    - If the user explicitly passed `--resume`, `--thread-id <id>`, or `--fresh`, do not ask.
-   - Otherwise, run `codex-companion task-resume-candidate --json` (retry with `BypassSandbox: true` if needed).
+   - Otherwise, run `<plugin-root>/scripts/codex-companion task-resume-candidate --json` (resolved from `../../scripts/codex-companion` relative to this skill directory; retry with `BypassSandbox: true` if needed).
    - If `available: true`, call `ask_question` once with two options:
      - `Continue current Codex thread` vs `Start a new Codex thread`
      - Prefix `(Recommended)` on `Continue current Codex thread` when the user gave a clear follow-up ("continue", "resume", "keep going", "apply the fix", "dig deeper"), otherwise on `Start a new Codex thread`.
@@ -33,10 +33,10 @@ Delegate a debugging, investigation, or implementation task to Codex via `codex-
 
 ## Invocation
 
-Run `codex-companion task` cleanly (no shell chaining; retry with `BypassSandbox: true` if sandbox blocks `codex`):
+Resolve this plugin's bundled `../../scripts/codex-companion` relative to this skill directory and invoke it by its literal absolute path (no `$HOME` expansion or shell chaining so prefix allowlists stay scoped to this plugin; retry with `BypassSandbox: true` if sandbox blocks `codex`):
 
 ```bash
-codex-companion task [--background] [--write | --sandbox <mode>] [--resume-last | --thread-id <id>] [--model <model>] [--effort <effort>] [--service-tier <tier>] (--prompt-file <path> | "<prompt>")
+<plugin-root>/scripts/codex-companion task [--background] [--write | --sandbox <mode>] [--resume-last | --thread-id <id>] [--model <model>] [--effort <effort>] [--service-tier <tier>] (--prompt-file <path> | "<prompt>")
 ```
 
 - If `codex-companion` reports Codex is missing or unauthenticated, stop and tell the user to run `/codex-setup`.

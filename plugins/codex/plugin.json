@@ -1,15 +1,26 @@
 {
+  "$schema": "https://antigravity.google/schemas/v1/plugin.json",
   "name": "codex-plugin-agy",
   "displayName": "Codex Companion",
   "version": "1.0.6",
   "description": "Use OpenAI Codex from Antigravity for read-only code reviews, adversarial reviews, rescue tasks, and session handoffs.",
-  "author": {
-    "name": "OpenAI (Antigravity port)"
-  },
-  "repository": "https://github.com/hjyker/codex-plugin-agy",
   "suggestedPrompts": [
     "/codex-review --background",
     "/codex-adversarial-review --base main",
     "/codex-setup"
+  ],
+  "author": {
+    "name": "OpenAI (Antigravity port)",
+    "url": "https://github.com/hjyker/codex-plugin-agy"
+  },
+  "homepage": "https://github.com/hjyker/codex-plugin-agy",
+  "repository": "https://github.com/hjyker/codex-plugin-agy",
+  "license": "Apache-2.0",
+  "keywords": [
+    "codex",
+    "openai",
+    "code-review",
+    "adversarial-review",
+    "debugging"
   ]
 }

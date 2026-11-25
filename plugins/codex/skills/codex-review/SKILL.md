@@ -35,11 +35,11 @@ Run a standard read-only Codex code review through the shared built-in Codex rev
 
 ## Invocation
 
-Run a clean standalone command (no shell chaining so prefix allowlists work; retry with `BypassSandbox: true` if sandbox blocks `codex`):
+Resolve this plugin's bundled `../../scripts/codex-companion` relative to this skill directory and invoke it by its literal absolute path (no `$HOME` expansion or shell chaining so prefix allowlists stay scoped to this plugin; retry with `BypassSandbox: true` if sandbox blocks `codex`):
 
 ```bash
-codex-companion review <user flags>
+<plugin-root>/scripts/codex-companion review <user flags>
 ```
 
-- **Foreground (`--wait`)**: set `WaitMsBeforeAsync: 10000` and `NotificationTimeoutSeconds: 300`; on a 5-minute heartbeat notification, run `codex-companion status` and post a concise 2-line progress update while continuing to wait. When finished, return stdout verbatim without paraphrasing or auto-fixing.
+- **Foreground (`--wait`)**: set `WaitMsBeforeAsync: 10000` and `NotificationTimeoutSeconds: 300`; on a 5-minute heartbeat notification, run `<plugin-root>/scripts/codex-companion status` and post a concise 2-line progress update while continuing to wait. When finished, return stdout verbatim without paraphrasing or auto-fixing.
 - **Background (`--background`)**: launch with `WaitMsBeforeAsync: 500` and `NotificationTimeoutSeconds: 300`, then tell the user: "Codex review started in the background. Check `/codex-status` for progress (you will also be notified automatically when it completes)." End the turn without polling.

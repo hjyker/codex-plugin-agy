@@ -41,7 +41,23 @@
 
 ## 安装
 
-克隆仓库并运行一键安装脚本：
+本插件已实现 **100% 目录自包含**（全部脚本打包在 `plugins/codex/` 内，**不会**向 `~/.local/bin` 或系统 `PATH` 注入任何全局命令）。支持以下两种安装方式：
+
+### 方式一：使用官方 Antigravity CLI（`agy`，推荐）
+
+```bash
+git clone https://github.com/hjyker/codex-plugin-agy.git
+cd codex-plugin-agy
+
+# 校验 manifest、hooks、skills 与 subagent
+agy plugin validate ./plugins/codex
+
+# 按官方规范安装到 ~/.gemini/config/plugins/
+agy plugin install ./plugins/codex
+agy plugin list
+```
+
+### 方式二：本地开发软链安装（仅装了 Antigravity App、未装 `agy` CLI 时）
 
 ```bash
 git clone https://github.com/hjyker/codex-plugin-agy.git /opt/life/codex-plugin-agy
@@ -49,11 +65,7 @@ cd /opt/life/codex-plugin-agy
 ./scripts/install-agy.sh
 ```
 
-脚本会自动完成两项全局安装（跨所有项目生效）：
-1. 创建插件软链：`~/.gemini/config/plugins/codex-plugin-agy` → `plugins/codex`
-2. 安装全局 CLI 入口：`~/.local/bin/codex-companion`（自动统一 `CODEX_PLUGIN_DATA=~/.codex-plugin-agy` 与 `PATH`，确保 Hooks 与命令行共享同一份状态目录）
-
-> 请确保 `~/.local/bin` 已在你的 `PATH` 环境变量中。
+脚本仅创建一条软链 `~/.gemini/config/plugins/codex-plugin-agy` → `plugins/codex`（方便本地修改或 `git pull` 即时生效），不会往全局 `PATH` 写入任何文件。
 
 安装完成后，在 Antigravity 中运行自检：
 
@@ -61,7 +73,7 @@ cd /opt/life/codex-plugin-agy
 /codex-setup
 ```
 
-看到 `Status: ready` 即可开始使用。首次执行需要访问本机 `codex` 或网络的命令时，若 Antigravity 弹出权限确认，建议对 `codex-companion` 前缀选择 **Always Allow**，后续所有项目均可顺畅运行。
+看到 `Status: ready` 即可开始使用。首次执行需要访问本机 `codex` 或网络的命令时，若 Antigravity 弹出权限确认，建议对该插件内置脚本路径 `<plugin-root>/scripts/codex-companion` 选择 **Always Allow**，既安全收敛权限边界，又能跨项目顺畅运行。
 
 ---
 

@@ -3,14 +3,14 @@
     "SessionStart": [
       {
         "type": "command",
-        "command": "PATH=\"$HOME/.local/bin:$PATH\" CODEX_PLUGIN_DATA=\"$HOME/.codex-plugin-agy\" node ./scripts/session-lifecycle-hook.mjs SessionStart",
+        "command": "PATH=\"$HOME/.local/bin:$PATH\" CODEX_PLUGIN_DATA=\"${PLUGIN_DATA:-$HOME/.codex-plugin-agy}\" node ./scripts/session-lifecycle-hook.mjs SessionStart",
         "timeout": 5
       }
     ],
     "Stop": [
       {
         "type": "command",
-        "command": "PATH=\"$HOME/.local/bin:$PATH\" CODEX_PLUGIN_DATA=\"$HOME/.codex-plugin-agy\" node ./scripts/stop-review-gate-hook.mjs",
+        "command": "PATH=\"$HOME/.local/bin:$PATH\" CODEX_PLUGIN_DATA=\"${PLUGIN_DATA:-$HOME/.codex-plugin-agy}\" node ./scripts/stop-review-gate-hook.mjs",
         "timeout": 900
       }
     ]

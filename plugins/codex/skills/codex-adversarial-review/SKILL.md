@@ -31,11 +31,11 @@ Run a steerable adversarial Codex review through the shared plugin runtime (`tur
 
 ## Invocation
 
-Run as a clean standalone command (no shell chaining; retry with `BypassSandbox: true` if sandbox blocks `codex`):
+Resolve this plugin's bundled `../../scripts/codex-companion` relative to this skill directory and invoke it by its literal absolute path (no `$HOME` expansion or shell chaining so prefix allowlists stay scoped to this plugin; retry with `BypassSandbox: true` if sandbox blocks `codex`):
 
 ```bash
-codex-companion adversarial-review <user flags and focus text>
+<plugin-root>/scripts/codex-companion adversarial-review <user flags and focus text>
 ```
 
-- **Foreground (`--wait`)**: on a 5-minute heartbeat notification, run `codex-companion status` and post a concise 2-line progress update while continuing to wait. When finished, return stdout verbatim without paraphrasing or auto-fixing.
+- **Foreground (`--wait`)**: on a 5-minute heartbeat notification, run `<plugin-root>/scripts/codex-companion status` and post a concise 2-line progress update while continuing to wait. When finished, return stdout verbatim without paraphrasing or auto-fixing.
 - **Background (`--background`)**: launch with `WaitMsBeforeAsync: 500` and `NotificationTimeoutSeconds: 300`, then inform the user: "Codex adversarial review started in the background. Check `/codex-status` for progress (you will also be notified automatically when it completes)." End the turn without polling.

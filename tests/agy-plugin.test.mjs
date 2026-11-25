@@ -16,23 +16,32 @@ const SESSION_HOOK = path.join(PLUGIN_ROOT, "scripts", "session-lifecycle-hook.m
 const STOP_HOOK = path.join(PLUGIN_ROOT, "scripts", "stop-review-gate-hook.mjs");
 
 const ALLOWED_PLUGIN_JSON_KEYS = new Set([
+  "$schema",
   "name",
   "displayName",
   "description",
   "version",
   "logo",
   "suggestedPrompts",
+  "skills",
   "author",
   "homepage",
   "repository",
+  "license",
+  "keywords",
+  "extensions",
   "disabled"
 ]);
 
 test("AGY plugin.json uses only allowlisted top-level fields and root hooks.json follows AGY schema", () => {
   const manifest = JSON.parse(fs.readFileSync(path.join(PLUGIN_ROOT, "plugin.json"), "utf8"));
+  assert.equal(manifest.$schema, "https://antigravity.google/schemas/v1/plugin.json");
   assert.equal(manifest.name, "codex-plugin-agy");
+  assert.equal(manifest.license, "Apache-2.0");
   assert.ok(manifest.description);
   assert.ok(Array.isArray(manifest.suggestedPrompts) && manifest.suggestedPrompts.length <= 3);
+  assert.ok(Array.isArray(manifest.keywords) && manifest.keywords.length > 0);
+  assert.equal(fs.existsSync(path.join(PLUGIN_ROOT, "README.md")), true);
   for (const key of Object.keys(manifest)) {
     assert.equal(ALLOWED_PLUGIN_JSON_KEYS.has(key), true, `Unexpected plugin.json field: ${key}`);
   }
@@ -44,6 +53,9 @@ test("AGY plugin.json uses only allowlisted top-level fields and root hooks.json
   assert.equal(hooks["codex-companion"].SessionStart[0].type, "command");
   assert.equal(hooks["codex-companion"].Stop[0].type, "command");
   assert.doesNotMatch(JSON.stringify(hooks), /CLAUDE_PLUGIN_ROOT/);
+
+  const installScript = fs.readFileSync(path.join(ROOT, "scripts", "install-agy.sh"), "utf8");
+  assert.doesNotMatch(installScript, /\.local\/bin/);
 });
 
 test("all 8 AGY slash-command skills and rescue agent follow Antigravity conventions", () => {
@@ -362,5 +374,33 @@ test("adversarial-review forwards --effort and --service-tier while native revie
     }
   );
   assert.notEqual(rejectedEffort.status, 0);
+});
+
+test("bundled scripts/codex-companion runs self-contained without global PATH injection", () => {
+  const repo = makeTempDir();
+  const binDir = makeTempDir();
+  const fakeHome = makeTempDir();
+  installFakeCodex(binDir);
+  initGitRepo(repo);
+
+  const bundledCli = path.join(PLUGIN_ROOT, "scripts", "codex-companion");
+  const mode = fs.statSync(bundledCli).mode & 0o111;
+  assert.ok(mode !== 0, "Bundled scripts/codex-companion must be executable");
+
+  const env = { ...buildEnv(binDir), HOME: fakeHome };
+  delete env.CODEX_PLUGIN_DATA;
+  delete env.CLAUDE_PLUGIN_DATA;
+  delete env.PLUGIN_DATA;
+
+  const setupRes = run(bundledCli, ["setup", "--enable-review-gate", "--json"], { cwd: repo, env });
+  assert.equal(setupRes.status, 0, setupRes.stderr);
+  const payload = JSON.parse(setupRes.stdout);
+  assert.equal(payload.ready, true);
+  assert.equal(payload.reviewGateEnabled, true);
+  assert.equal(
+    fs.existsSync(path.join(fakeHome, ".codex-plugin-agy", "state")),
+    true,
+    "Bundled launcher should default state into $HOME/.codex-plugin-agy"
+  );
 });
 

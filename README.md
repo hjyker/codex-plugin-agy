@@ -41,7 +41,23 @@ Once installed, all 8 slash commands are available across every project in both 
 
 ## Install
 
-Clone the repository and run the global install script:
+This plugin is **100% self-contained** inside `plugins/codex/` (no global binary injected into `~/.local/bin` or `PATH`). Choose either the official Antigravity CLI or the local symlink installer:
+
+### Option 1: Official Antigravity CLI (`agy`, Recommended)
+
+```bash
+git clone https://github.com/hjyker/codex-plugin-agy.git
+cd codex-plugin-agy
+
+# Validate manifest, hooks, skills, and subagent
+agy plugin validate ./plugins/codex
+
+# Install locally into ~/.gemini/config/plugins/
+agy plugin install ./plugins/codex
+agy plugin list
+```
+
+### Option 2: Local Dev Symlink (for Antigravity App without `agy` CLI)
 
 ```bash
 git clone https://github.com/hjyker/codex-plugin-agy.git /opt/life/codex-plugin-agy
@@ -49,11 +65,7 @@ cd /opt/life/codex-plugin-agy
 ./scripts/install-agy.sh
 ```
 
-The installer sets up two global entrypoints (works across all projects):
-1. Plugin symlink: `~/.gemini/config/plugins/codex-plugin-agy` → `plugins/codex`
-2. Global CLI launcher: `~/.local/bin/codex-companion` (unifies `CODEX_PLUGIN_DATA=~/.codex-plugin-agy` and `PATH` so Antigravity hooks and terminal commands always share the same state)
-
-> Make sure `~/.local/bin` is on your `PATH`.
+This creates a single symlink `~/.gemini/config/plugins/codex-plugin-agy` → `plugins/codex` so edits or `git pull` take effect immediately without modifying global `PATH`.
 
 Then verify everything inside Antigravity:
 
@@ -61,7 +73,7 @@ Then verify everything inside Antigravity:
 /codex-setup
 ```
 
-When Antigravity first asks for non-sandboxed execution permission for `codex-companion` (needed to spawn local `codex` and reach OpenAI), choose **Always Allow** for the `codex-companion` prefix so all future runs work smoothly across every workspace.
+When Antigravity first asks for non-sandboxed execution permission for `<plugin-root>/scripts/codex-companion` (needed to spawn local `codex` and reach OpenAI), choose **Always Allow** for that script prefix so all future runs work smoothly across every workspace.
 
 ---
 
