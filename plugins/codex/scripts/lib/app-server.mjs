@@ -17,14 +17,9 @@ import { ensureBrokerSession, loadBrokerSession } from "./broker-lifecycle.mjs";
 import { terminateProcessTree } from "./process.mjs";
 
 function loadPluginManifest() {
-  const candidates = [
-    new URL("../../plugin.json", import.meta.url),
-    new URL("../../.claude-plugin/plugin.json", import.meta.url)
-  ];
-  for (const candidate of candidates) {
-    if (fs.existsSync(candidate)) {
-      return JSON.parse(fs.readFileSync(candidate, "utf8"));
-    }
+  const manifestUrl = new URL("../../plugin.json", import.meta.url);
+  if (fs.existsSync(manifestUrl)) {
+    return JSON.parse(fs.readFileSync(manifestUrl, "utf8"));
   }
   return {};
 }

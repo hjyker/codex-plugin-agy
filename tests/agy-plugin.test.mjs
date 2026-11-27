@@ -92,11 +92,9 @@ test("resolveStateDir honors CODEX_PLUGIN_DATA and PLUGIN_DATA and persists acti
   const workspace = makeTempDir();
   const codexDataDir = makeTempDir();
   const prevCodex = process.env.CODEX_PLUGIN_DATA;
-  const prevClaude = process.env.CLAUDE_PLUGIN_DATA;
   const prevPlugin = process.env.PLUGIN_DATA;
 
   try {
-    delete process.env.CLAUDE_PLUGIN_DATA;
     delete process.env.PLUGIN_DATA;
     process.env.CODEX_PLUGIN_DATA = codexDataDir;
 
@@ -113,8 +111,6 @@ test("resolveStateDir honors CODEX_PLUGIN_DATA and PLUGIN_DATA and persists acti
   } finally {
     if (prevCodex == null) delete process.env.CODEX_PLUGIN_DATA;
     else process.env.CODEX_PLUGIN_DATA = prevCodex;
-    if (prevClaude == null) delete process.env.CLAUDE_PLUGIN_DATA;
-    else process.env.CLAUDE_PLUGIN_DATA = prevClaude;
     if (prevPlugin == null) delete process.env.PLUGIN_DATA;
     else process.env.PLUGIN_DATA = prevPlugin;
   }
@@ -391,7 +387,6 @@ test("bundled scripts/codex-companion runs self-contained without global PATH in
 
   const env = { ...buildEnv(binDir), HOME: fakeHome };
   delete env.CODEX_PLUGIN_DATA;
-  delete env.CLAUDE_PLUGIN_DATA;
   delete env.PLUGIN_DATA;
 
   const setupRes = run(bundledCli, ["setup", "--enable-review-gate", "--json"], { cwd: repo, env });
@@ -405,7 +400,6 @@ test("bundled scripts/codex-companion runs self-contained without global PATH in
     "Bundled launcher should default state into $HOME/.codex-plugin-agy"
   );
 });
-
 
 test("parseCodexThreadRef parses raw IDs and codex://threads/<id> deeplinks", () => {
   const uuid = "0195a3f0-0000-7000-8000-000000000001";

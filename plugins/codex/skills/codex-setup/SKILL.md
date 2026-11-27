@@ -22,4 +22,3 @@ Check local Codex readiness and optionally toggle the stop-time review gate.
 
 - Present the setup check summary clearly (node, npm, codex, auth, session runtime, review gate status, actions taken, and next steps).
 - If Codex is installed but not authenticated, tell the user to run `codex login` in their terminal.
-- Replace any `/codex:` hints with `/codex-` (e.g., `/codex-setup --enable-review-gate`).

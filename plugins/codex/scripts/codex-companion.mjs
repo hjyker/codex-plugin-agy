@@ -22,7 +22,6 @@ import {
     getCodexAuthStatus,
     getCodexAvailability,
     getSessionRuntimeStatus,
-    importExternalAgentSession,
     interruptAppServerTurn,
     parseCodexThreadRef,
     parseStructuredOutput,
@@ -31,7 +30,6 @@ import {
     runAppServerReview,
     runAppServerTurn
   } from "./lib/codex.mjs";
-import { resolveClaudeSessionPath } from "./lib/claude-session-transfer.mjs";
 import { readStdinIfPiped } from "./lib/fs.mjs";
 import { collectReviewContext, ensureGitRepository, resolveReviewTarget } from "./lib/git.mjs";
 import { binaryAvailable, terminateProcessTree } from "./lib/process.mjs";
@@ -83,7 +81,7 @@ const DEFAULT_STATUS_POLL_INTERVAL_MS = 2000;
 const VALID_REASONING_EFFORTS = new Set(["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]);
 const VALID_SANDBOX_MODES = new Set(["read-only", "workspace-write", "danger-full-access"]);
 const MODEL_ALIASES = new Map([["spark", "gpt-5.3-codex-spark"]]);
-const STOP_REVIEW_TASK_MARKER = "Run a stop-gate review of the previous Claude turn.";
+const STOP_REVIEW_TASK_MARKER = "Run a stop-gate review of the previous Antigravity turn.";
 
 function printUsage() {
   console.log(
@@ -94,7 +92,7 @@ function printUsage() {
       "  codex-companion adversarial-review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>] [--model <model>] [--effort <low|medium|high|xhigh|max|ultra>] [--service-tier <fast|flex>] [focus text]",
       "  codex-companion task [--background] [--write] [--sandbox <read-only|workspace-write|danger-full-access>] [--resume-last|--resume|--thread-id <id|deeplink>|--fresh] [--model <model>] [--effort <low|medium|high|xhigh|max|ultra>] [--service-tier <fast|flex>] [--prompt-file <path>] [prompt]",
       "  codex-companion read <thread-id|codex://threads/<id>> [--limit <n>] [--all] [--include-tools] [--json]",
-      "  codex-companion transfer [--handoff <text>|--handoff-file <path>|--source <jsonl>] [--title <name>] [--model <model>] [--json]",
+      "  codex-companion transfer [--handoff <text>|--handoff-file <path>] [--title <name>] [--model <model>] [--json]",
       "  codex-companion status [job-id] [--all] [--json]",
       "  codex-companion result [job-id] [--json]",
       "  codex-companion cancel [job-id] [--json]",
@@ -231,11 +229,11 @@ async function buildSetupReport(cwd, actionsTaken = []) {
     nextSteps.push("Install Codex with `curl -fsSL https://chatgpt.com/codex/install.sh | sh` (or `npm install -g @openai/codex`).");
   }
   if (codexStatus.available && !authStatus.loggedIn && authStatus.requiresOpenaiAuth) {
-    nextSteps.push("Run `!codex login`.");
-    nextSteps.push("If browser login is blocked, retry with `!codex login --device-auth` or `!codex login --with-api-key`.");
+    nextSteps.push("Run `codex login` in your terminal.");
+    nextSteps.push("If browser login is blocked, retry with `codex login --device-auth` or `codex login --with-api-key`.");
   }
   if (!config.stopReviewGate) {
-    nextSteps.push("Optional: run `/codex:setup --enable-review-gate` to require a fresh review before stop.");
+    nextSteps.push("Optional: run `/codex-setup --enable-review-gate` to require a fresh review before stop.");
   }
 
   return {
@@ -310,13 +308,13 @@ function buildNativeReviewTarget(target) {
 function validateNativeReviewRequest(target, focusText) {
   if (focusText.trim()) {
     throw new Error(
-      `\`/codex:review\` now maps directly to the built-in reviewer and does not support custom focus text. Retry with \`/codex:adversarial-review ${focusText.trim()}\` for focused review instructions.`
+      `\`/codex-review\` maps directly to the built-in reviewer and does not support custom focus text. Retry with \`/codex-adversarial-review ${focusText.trim()}\` for focused review instructions.`
     );
   }
 
   const nativeTarget = buildNativeReviewTarget(target);
   if (!nativeTarget) {
-    throw new Error("This `/codex:review` target is not supported by the built-in reviewer. Retry with `/codex:adversarial-review` for custom targeting.");
+    throw new Error("This `/codex-review` target is not supported by the built-in reviewer. Retry with `/codex-adversarial-review` for custom targeting.");
   }
 
   return nativeTarget;
@@ -330,12 +328,12 @@ function isActiveJobStatus(status) {
   return status === "queued" || status === "running";
 }
 
-function getCurrentClaudeSessionId() {
+function getCurrentSessionId() {
   return process.env[SESSION_ID_ENV] ?? null;
 }
 
-function filterJobsForCurrentClaudeSession(jobs) {
-  const sessionId = getCurrentClaudeSessionId();
+function filterJobsForCurrentSession(jobs) {
+  const sessionId = getCurrentSessionId();
   if (!sessionId) {
     return jobs;
   }
@@ -374,12 +372,12 @@ async function waitForSingleJobSnapshot(cwd, reference, options = {}) {
 
 async function resolveLatestTrackedTaskThread(cwd, options = {}) {
   const workspaceRoot = resolveWorkspaceRoot(cwd);
-  const sessionId = getCurrentClaudeSessionId();
+  const sessionId = getCurrentSessionId();
   const jobs = sortJobsNewestFirst(listJobs(workspaceRoot)).filter((job) => job.id !== options.excludeJobId);
-  const visibleJobs = filterJobsForCurrentClaudeSession(jobs);
+  const visibleJobs = filterJobsForCurrentSession(jobs);
   const activeTask = visibleJobs.find((job) => job.jobClass === "task" && (job.status === "queued" || job.status === "running"));
   if (activeTask) {
-    throw new Error(`Task ${activeTask.id} is still running. Use /codex:status before continuing it.`);
+    throw new Error(`Task ${activeTask.id} is still running. Use /codex-status before continuing it.`);
   }
 
   const trackedTask = findLatestResumableTaskJob(visibleJobs);
@@ -588,7 +586,7 @@ function buildTaskRunMetadata({ prompt, resumeLast = false }) {
   if (!resumeLast && String(prompt ?? "").includes(STOP_REVIEW_TASK_MARKER)) {
     return {
       title: "Codex Stop Gate Review",
-      summary: "Stop-gate review of previous Claude turn"
+      summary: "Stop-gate review of previous Antigravity turn"
     };
   }
 
@@ -601,7 +599,7 @@ function buildTaskRunMetadata({ prompt, resumeLast = false }) {
 }
 
 function renderQueuedTaskLaunch(payload) {
-  return `${payload.title} started in the background as ${payload.jobId}. Check /codex:status ${payload.jobId} for progress.\n`;
+  return `${payload.title} started in the background as ${payload.jobId}. Check /codex-status ${payload.jobId} for progress.\n`;
 }
 
 function getJobKindLabel(kind, jobClass) {
@@ -664,12 +662,8 @@ function buildTaskRequest({ cwd, model, effort, serviceTier, prompt, write, sand
 }
 
 function renderTransferResult(payload) {
-  const heading =
-    payload.mode === "handoff"
-      ? "Transferred the Antigravity session context into a persistent Codex thread."
-      : "Transferred the Claude session into a Codex thread with visible turn history.";
   const lines = [
-    heading,
+    "Transferred the Antigravity session context into a persistent Codex thread.",
     `Codex session ID: ${payload.threadId}`,
     `Resume in Codex: ${payload.resumeCommand}`
   ];
@@ -710,27 +704,6 @@ function readTransferHandoffBody(cwd, options = {}) {
 async function executeTransfer(cwd, options = {}) {
   const workspaceRoot = resolveWorkspaceRoot(cwd);
   const explicitHandoff = readTransferHandoffBody(cwd, options);
-  const hasExplicitClaudeSource = Boolean(options.source);
-
-  if (!explicitHandoff && (hasExplicitClaudeSource || process.env.CODEX_COMPANION_TRANSCRIPT_PATH)) {
-    const sourcePath = resolveClaudeSessionPath(cwd, {
-      source: options.source
-    });
-    const result = await importExternalAgentSession(cwd, { sourcePath });
-    const payload = {
-      mode: "claude-import",
-      threadId: result.threadId,
-      resumeCommand: `codex resume ${result.threadId}`,
-      sourcePath,
-      sessionId: path.basename(sourcePath, ".jsonl")
-    };
-
-    return {
-      payload,
-      rendered: renderTransferResult(payload)
-    };
-  }
-
   const activeSession = loadActiveSession(workspaceRoot);
   const handoffBody =
     explicitHandoff ||
@@ -738,7 +711,7 @@ async function executeTransfer(cwd, options = {}) {
 
   if (!handoffBody) {
     throw new Error(
-      "Could not identify session context to transfer. Provide --handoff <summary>, --handoff-file <path>, piped stdin, or --source <path-to-claude-jsonl>."
+      "Could not identify session context to transfer. Provide --handoff <summary>, --handoff-file <path>, or piped stdin."
     );
   }
 
@@ -783,7 +756,7 @@ function readTaskPrompt(cwd, options, positionals) {
 
 function requireTaskRequest(prompt, resumeLast) {
   if (!prompt && !resumeLast) {
-    throw new Error("Provide a prompt, a prompt file, piped stdin, or use --resume-last.");
+    throw new Error("Provide a prompt, a prompt file, piped stdin, --thread-id, or use --resume-last.");
   }
 }
 
@@ -1014,7 +987,7 @@ async function handleRead(argv) {
 
 async function handleTransfer(argv) {
   const { options, positionals } = parseCommandInput(argv, {
-    valueOptions: ["cwd", "source", "handoff", "handoff-file", "title", "model"],
+    valueOptions: ["cwd", "handoff", "handoff-file", "title", "model"],
     booleanOptions: ["json"],
     aliasMap: {
       m: "model"
@@ -1024,7 +997,6 @@ async function handleTransfer(argv) {
   const cwd = resolveCommandCwd(options);
   const positionalHandoff = positionals.join(" ").trim();
   const { payload, rendered } = await executeTransfer(cwd, {
-    source: options.source,
     handoff: options.handoff ?? (positionalHandoff || undefined),
     handoffFile: options["handoff-file"],
     title: options.title,
@@ -1160,8 +1132,8 @@ function handleTaskResumeCandidate(argv) {
 
   const cwd = resolveCommandCwd(options);
   const workspaceRoot = resolveCommandWorkspace(options);
-  const sessionId = getCurrentClaudeSessionId();
-  const jobs = filterJobsForCurrentClaudeSession(sortJobsNewestFirst(listJobs(workspaceRoot)));
+  const sessionId = getCurrentSessionId();
+  const jobs = filterJobsForCurrentSession(sortJobsNewestFirst(listJobs(workspaceRoot)));
   const candidate = findLatestResumableTaskJob(jobs);
 
   const payload = {

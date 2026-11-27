@@ -14,20 +14,9 @@ import {
   teardownBrokerSession
 } from "./lib/broker-lifecycle.mjs";
 import { loadState, resolveStateFile, saveActiveSession, saveState } from "./lib/state.mjs";
-import { TRANSCRIPT_PATH_ENV } from "./lib/claude-session-transfer.mjs";
 import { resolveWorkspaceRoot } from "./lib/workspace.mjs";
 
 export const SESSION_ID_ENV = "CODEX_COMPANION_SESSION_ID";
-const PLUGIN_DATA_ENV = "CLAUDE_PLUGIN_DATA";
-
-function isAgyHookInput(input = {}) {
-  return (
-    Object.prototype.hasOwnProperty.call(input, "conversationId") ||
-    Object.prototype.hasOwnProperty.call(input, "hookEventName") ||
-    Object.prototype.hasOwnProperty.call(input, "workspacePaths") ||
-    Object.prototype.hasOwnProperty.call(input, "transcriptPath")
-  );
-}
 
 function readHookInput() {
   const raw = fs.readFileSync(0, "utf8").trim();
@@ -35,17 +24,6 @@ function readHookInput() {
     return {};
   }
   return JSON.parse(raw);
-}
-
-function shellEscape(value) {
-  return `'${String(value).replace(/'/g, `'\"'\"'`)}'`;
-}
-
-function appendEnvVar(name, value) {
-  if (!process.env.CLAUDE_ENV_FILE || value == null || value === "") {
-    return;
-  }
-  fs.appendFileSync(process.env.CLAUDE_ENV_FILE, `export ${name}=${shellEscape(value)}\n`, "utf8");
 }
 
 function cleanupSessionJobs(cwd, sessionId) {
@@ -88,17 +66,11 @@ function handleSessionStart(input) {
   const transcriptPath = input.transcriptPath || input.transcript_path || null;
   const cwd = input.cwd || input.workspacePaths?.[0] || process.cwd();
 
-  appendEnvVar(SESSION_ID_ENV, sessionId);
-  appendEnvVar(TRANSCRIPT_PATH_ENV, transcriptPath);
-  appendEnvVar(PLUGIN_DATA_ENV, process.env[PLUGIN_DATA_ENV]);
-
   if (cwd && (sessionId || transcriptPath)) {
     saveActiveSession(cwd, { sessionId, transcriptPath });
   }
 
-  if (isAgyHookInput(input)) {
-    process.stdout.write("{}\n");
-  }
+  process.stdout.write("{}\n");
 }
 
 async function handleSessionEnd(input) {

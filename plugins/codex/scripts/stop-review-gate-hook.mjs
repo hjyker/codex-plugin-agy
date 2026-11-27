@@ -17,17 +17,6 @@ import { resolveWorkspaceRoot } from "./lib/workspace.mjs";
 const STOP_REVIEW_TIMEOUT_MS = 15 * 60 * 1000;
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const ROOT_DIR = path.resolve(SCRIPT_DIR, "..");
-const STOP_REVIEW_TASK_MARKER = "Run a stop-gate review of the previous Claude turn.";
-
-function isAgyHookInput(input = {}) {
-  return (
-    Object.prototype.hasOwnProperty.call(input, "conversationId") ||
-    Object.prototype.hasOwnProperty.call(input, "hookEventName") ||
-    Object.prototype.hasOwnProperty.call(input, "terminationReason") ||
-    Object.prototype.hasOwnProperty.call(input, "continuationActive") ||
-    Object.prototype.hasOwnProperty.call(input, "transcriptPath")
-  );
-}
 
 function readHookInput() {
   const raw = fs.readFileSync(0, "utf8").trim();
@@ -61,11 +50,11 @@ function buildStopReviewPrompt(input = {}) {
     String(input.last_assistant_message ?? "").trim() ||
     extractLastAssistantMessageFromTranscript(input.transcriptPath || input.transcript_path);
   const template = loadPromptTemplate(ROOT_DIR, "stop-review-gate");
-  const claudeResponseBlock = lastAssistantMessage
+  const assistantResponseBlock = lastAssistantMessage
     ? ["Previous assistant response:", lastAssistantMessage].join("\n")
     : "";
   return interpolateTemplate(template, {
-    CLAUDE_RESPONSE_BLOCK: claudeResponseBlock
+    ASSISTANT_RESPONSE_BLOCK: assistantResponseBlock
   });
 }
 
@@ -76,7 +65,7 @@ function buildSetupNote(cwd) {
   }
 
   const detail = availability.detail ? ` ${availability.detail}.` : "";
-  return `Codex is not set up for the review gate.${detail} Run /codex:setup.`;
+  return `Codex is not set up for the review gate.${detail} Run /codex-setup.`;
 }
 
 function parseStopReviewOutput(rawOutput) {
@@ -85,7 +74,7 @@ function parseStopReviewOutput(rawOutput) {
     return {
       ok: false,
       reason:
-        "The stop-time Codex review task returned no final output. Run /codex:review --wait manually or bypass the gate."
+        "The stop-time Codex review task returned no final output. Run /codex-review --wait manually or bypass the gate."
     };
   }
 
@@ -104,7 +93,7 @@ function parseStopReviewOutput(rawOutput) {
   return {
     ok: false,
     reason:
-      "The stop-time Codex review task returned an unexpected answer. Run /codex:review --wait manually or bypass the gate."
+      "The stop-time Codex review task returned an unexpected answer. Run /codex-review --wait manually or bypass the gate."
   };
 }
 
@@ -127,7 +116,7 @@ function runStopReview(cwd, input = {}) {
     return {
       ok: false,
       reason:
-        "The stop-time Codex review task timed out after 15 minutes. Run /codex:review --wait manually or bypass the gate."
+        "The stop-time Codex review task timed out after 15 minutes. Run /codex-review --wait manually or bypass the gate."
     };
   }
 
@@ -137,7 +126,7 @@ function runStopReview(cwd, input = {}) {
       ok: false,
       reason: detail
         ? `The stop-time Codex review task failed: ${detail}`
-        : "The stop-time Codex review task failed. Run /codex:review --wait manually or bypass the gate."
+        : "The stop-time Codex review task failed. Run /codex-review --wait manually or bypass the gate."
     };
   }
 
@@ -148,33 +137,30 @@ function runStopReview(cwd, input = {}) {
     return {
       ok: false,
       reason:
-        "The stop-time Codex review task returned invalid JSON. Run /codex:review --wait manually or bypass the gate."
+        "The stop-time Codex review task returned invalid JSON. Run /codex-review --wait manually or bypass the gate."
     };
   }
 }
 
 function main() {
   const input = readHookInput();
-  const agyMode = isAgyHookInput(input);
-  const cwd = input.cwd || input.workspacePaths?.[0] || process.env.CLAUDE_PROJECT_DIR || process.cwd();
+  const cwd = input.cwd || input.workspacePaths?.[0] || process.cwd();
   const workspaceRoot = resolveWorkspaceRoot(cwd);
   const config = getConfig(workspaceRoot);
 
   const jobs = sortJobsNewestFirst(filterJobsForCurrentSession(listJobs(workspaceRoot), input));
   const runningJob = jobs.find((job) => job.status === "queued" || job.status === "running");
-  const statusCmd = agyMode ? "/codex-status" : "/codex:status";
-  const cancelCmd = agyMode ? "/codex-cancel" : "/codex:cancel";
   const runningTaskNote = runningJob
-    ? `Codex task ${runningJob.id} is still running. Check ${statusCmd} and use ${cancelCmd} ${runningJob.id} if you want to stop it before ending the session.`
+    ? `Codex task ${runningJob.id} is still running. Check /codex-status and use /codex-cancel ${runningJob.id} if you want to stop it before ending the session.`
     : null;
 
-  if (agyMode && input.terminationReason && input.terminationReason !== "NO_TOOL_CALL") {
+  if (input.terminationReason && input.terminationReason !== "NO_TOOL_CALL") {
     logNote(runningTaskNote);
     emitDecision({});
     return;
   }
 
-  if (agyMode && input.continuationActive) {
+  if (input.continuationActive) {
     logNote(runningTaskNote);
     emitDecision({});
     return;
@@ -182,9 +168,7 @@ function main() {
 
   if (!config.stopReviewGate) {
     logNote(runningTaskNote);
-    if (agyMode) {
-      emitDecision({});
-    }
+    emitDecision({});
     return;
   }
 
@@ -192,25 +176,21 @@ function main() {
   if (setupNote) {
     logNote(setupNote);
     logNote(runningTaskNote);
-    if (agyMode) {
-      emitDecision({});
-    }
+    emitDecision({});
     return;
   }
 
   const review = runStopReview(cwd, input);
   if (!review.ok) {
     emitDecision({
-      decision: agyMode ? "continue" : "block",
+      decision: "continue",
       reason: runningTaskNote ? `${runningTaskNote} ${review.reason}` : review.reason
     });
     return;
   }
 
   logNote(runningTaskNote);
-  if (agyMode) {
-    emitDecision({});
-  }
+  emitDecision({});
 }
 
 try {

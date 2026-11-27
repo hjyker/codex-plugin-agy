@@ -16,11 +16,13 @@ test("resolveStateDir uses a temp-backed per-workspace directory", () => {
   assert.match(stateDir, new RegExp(`^${os.tmpdir().replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
 });
 
-test("resolveStateDir uses CLAUDE_PLUGIN_DATA when it is provided", () => {
+test("resolveStateDir uses PLUGIN_DATA when it is provided", () => {
   const workspace = makeTempDir();
   const pluginDataDir = makeTempDir();
-  const previousPluginDataDir = process.env.CLAUDE_PLUGIN_DATA;
-  process.env.CLAUDE_PLUGIN_DATA = pluginDataDir;
+  const previousCodexDataDir = process.env.CODEX_PLUGIN_DATA;
+  const previousPluginDataDir = process.env.PLUGIN_DATA;
+  delete process.env.CODEX_PLUGIN_DATA;
+  process.env.PLUGIN_DATA = pluginDataDir;
 
   try {
     const stateDir = resolveStateDir(workspace);
@@ -32,10 +34,15 @@ test("resolveStateDir uses CLAUDE_PLUGIN_DATA when it is provided", () => {
       new RegExp(`^${path.join(pluginDataDir, "state").replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`)
     );
   } finally {
-    if (previousPluginDataDir == null) {
-      delete process.env.CLAUDE_PLUGIN_DATA;
+    if (previousCodexDataDir == null) {
+      delete process.env.CODEX_PLUGIN_DATA;
     } else {
-      process.env.CLAUDE_PLUGIN_DATA = previousPluginDataDir;
+      process.env.CODEX_PLUGIN_DATA = previousCodexDataDir;
+    }
+    if (previousPluginDataDir == null) {
+      delete process.env.PLUGIN_DATA;
+    } else {
+      process.env.PLUGIN_DATA = previousPluginDataDir;
     }
   }
 });

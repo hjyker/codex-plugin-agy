@@ -151,21 +151,6 @@ function nextTurnId(state) {
   return turnId;
 }
 
-function importLedgerPath() {
-  return path.join(process.env.CODEX_HOME || path.join(process.env.HOME, ".codex"), "external_agent_session_imports.json");
-}
-
-function loadImportLedger() {
-  const ledgerPath = importLedgerPath();
-  return fs.existsSync(ledgerPath) ? JSON.parse(fs.readFileSync(ledgerPath, "utf8")) : { records: [] };
-}
-
-function saveImportLedger(ledger) {
-  const ledgerPath = importLedgerPath();
-  fs.mkdirSync(path.dirname(ledgerPath), { recursive: true });
-  fs.writeFileSync(ledgerPath, JSON.stringify(ledger, null, 2));
-}
-
 function emitTurnCompleted(threadId, turnId, item) {
   const items = Array.isArray(item) ? item : [item];
   send({ method: "turn/started", params: { threadId, turn: buildTurn(turnId) } });
@@ -239,7 +224,7 @@ function structuredReviewPayload(prompt) {
 }
 
 function taskPayload(prompt, resume) {
-  if (prompt.includes("<task>") && prompt.includes("Only review the work from the previous Claude turn.")) {
+  if (prompt.includes("<task>") && prompt.includes("Only review the work from the previous Antigravity turn.")) {
     if (BEHAVIOR === "adversarial-clean") {
       return "ALLOW: No blocking issues found in the previous turn.";
     }
@@ -442,59 +427,6 @@ rl.on("line", (line) => {
         };
         saveState(state);
         send({ id: message.id, result: { thread: buildThread(thread), model: message.params.model || "gpt-5.4", modelProvider: "openai", serviceTier: null, cwd: thread.cwd, approvalPolicy: "never", sandbox: { type: "readOnly", access: { type: "fullAccess" }, networkAccess: false }, reasoningEffort: null } });
-        break;
-      }
-
-      case "externalAgentConfig/import": {
-        if (BEHAVIOR === "external-import-unsupported") {
-          send({ id: message.id, error: { code: -32601, message: "Unsupported method: externalAgentConfig/import" } });
-          break;
-        }
-        if (BEHAVIOR === "external-import-fails") {
-          send({ id: message.id, result: {} });
-          send({ method: "externalAgentConfig/import/completed", params: {} });
-          break;
-        }
-        const sessions = (message.params.migrationItems || [])
-          .flatMap((item) => item.details && Array.isArray(item.details.sessions) ? item.details.sessions : []);
-        const session = sessions[0];
-        if (!session) {
-          throw new Error("missing external session migration");
-        }
-        const sourcePath = fs.realpathSync(session.path);
-        const contents = fs.readFileSync(sourcePath, "utf8");
-        const contentSha256 = crypto.createHash("sha256").update(contents).digest("hex");
-        const ledger = loadImportLedger();
-        let record = ledger.records.find(
-          (candidate) => candidate.source_path === sourcePath && candidate.content_sha256 === contentSha256
-        );
-        let thread;
-        if (record) {
-          thread = ensureThread(state, record.imported_thread_id);
-        } else {
-          const records = contents.split(/\\r?\\n/).filter(Boolean).map((line) => JSON.parse(line));
-          const title = records.find((entry) => entry.type === "custom-title")?.customTitle || null;
-          const messages = records
-            .filter((entry) => entry.type === "user" || entry.type === "assistant")
-            .map((entry) => ({ role: entry.type, text: entry.message?.content || "" }));
-          thread = nextThread(state, session.cwd, false);
-          thread.name = title;
-          thread.preview = messages.find((entry) => entry.role === "user")?.text || "";
-          thread.visibleMessages = messages;
-          state.lastExternalAgentImport = { sourcePath, threadId: thread.id, messages };
-          record = {
-            source_path: sourcePath,
-            content_sha256: contentSha256,
-            imported_thread_id: thread.id,
-            imported_at: now(),
-            source_modified_at: null
-          };
-          ledger.records.push(record);
-          saveState(state);
-          saveImportLedger(ledger);
-        }
-        send({ id: message.id, result: {} });
-        send({ method: "externalAgentConfig/import/completed", params: {} });
         break;
       }
 

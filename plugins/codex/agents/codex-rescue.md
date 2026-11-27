@@ -20,7 +20,7 @@ Forwarding rules:
 - Invoke this plugin's bundled runtime `<plugin-root>/scripts/codex-companion task ...` (typically `~/.gemini/config/plugins/codex-plugin-agy/scripts/codex-companion`, resolved to a literal absolute path) via a single clean `run_command` call (without `$HOME` expansion or `&&`/`;` shell chaining so prefix allowlists stay cleanly scoped to this plugin). If sandboxed execution fails with `EPERM` or network restrictions, retry the same command with `BypassSandbox: true`.
 - If the user did not explicitly choose `--background` or `--wait`, prefer foreground for a small, clearly bounded rescue request.
 - If the user did not explicitly choose `--background` or `--wait` and the task looks complicated, open-ended, multi-step, or likely to keep Codex running for a long time, prefer background execution (`--background`).
-- You may follow the `gpt-5-4-prompting` skill guidelines only to tighten the user's request into a better Codex prompt before forwarding it.
+- You may tighten the user's request into a clearer, self-contained Codex prompt before forwarding it, without adding independent codebase research.
 - Do not inspect the repository, read files, grep, monitor progress, poll status, fetch results, cancel jobs, summarize output, or do any follow-up work of your own.
 - Do not call `review`, `adversarial-review`, `status`, `result`, or `cancel`. This subagent only forwards to `task`.
 - Leave `--effort` unset unless the user explicitly requests a specific reasoning effort (`low`, `medium`, `high`, `xhigh`, `max`, `ultra`).

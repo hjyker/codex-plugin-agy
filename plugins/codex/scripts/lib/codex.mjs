@@ -34,11 +34,6 @@
  *   onProgress: ProgressReporter | null
  * }} TurnCaptureState
  */
-import crypto from "node:crypto";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-
 import { readJsonFile } from "./fs.mjs";
 import { BROKER_BUSY_RPC_CODE, BROKER_ENDPOINT_ENV, CodexAppServerClient } from "./app-server.mjs";
 import { loadBrokerSession } from "./broker-lifecycle.mjs";
@@ -50,8 +45,6 @@ const DEFAULT_READ_LIMIT = 10;
 const CODEX_THREAD_DEEPLINK_RE = /^codex:\/\/threads\/([^/?#\s]+)(?:\/?(?:[?#].*)?)?$/i;
 const DEFAULT_CONTINUE_PROMPT =
   "Continue from the current thread state. Pick the next highest-value step and follow through until the task is resolved.";
-const EXTERNAL_AGENT_IMPORT_COMPLETED = "externalAgentConfig/import/completed";
-const EXTERNAL_AGENT_IMPORT_TIMEOUT_MS = 2 * 60 * 1000;
 
 function cleanCodexStderr(stderr) {
   return stderr
@@ -1147,85 +1140,6 @@ async function fetchLegacyTurnsHistory(client, threadId, options = {}) {
   };
 }
 
-function resolveCodexHome() {
-  return path.resolve(process.env.CODEX_HOME || path.join(os.homedir(), ".codex"));
-}
-
-function sourceContentSha256(sourcePath) {
-  return crypto.createHash("sha256").update(fs.readFileSync(sourcePath)).digest("hex");
-}
-
-function importedThreadIdForSource(sourcePath) {
-  const ledgerPath = path.join(resolveCodexHome(), "external_agent_session_imports.json");
-  if (!fs.existsSync(ledgerPath)) {
-    return null;
-  }
-  const ledger = readJsonFile(ledgerPath);
-  const canonicalSource = fs.realpathSync(sourcePath);
-  const contentSha256 = sourceContentSha256(canonicalSource);
-  const records = Array.isArray(ledger?.records) ? ledger.records : [];
-  const match = records
-    .filter(
-      (record) =>
-        record?.source_path === canonicalSource &&
-        record?.content_sha256 === contentSha256 &&
-        typeof record?.imported_thread_id === "string"
-    )
-    .at(-1);
-  return match?.imported_thread_id ?? null;
-}
-
-function externalAgentSessionMigration(sourcePath, cwd) {
-  return {
-    migrationItems: [
-      {
-        itemType: "SESSIONS",
-        description: `Transfer Claude session ${path.basename(sourcePath)}`,
-        cwd: null,
-        details: {
-          plugins: [],
-          sessions: [{ path: sourcePath, cwd, title: null }],
-          mcpServers: [],
-          hooks: [],
-          subagents: [],
-          commands: []
-        }
-      }
-    ]
-  };
-}
-
-async function requestExternalAgentSessionImport(client, params) {
-  const previousHandler = client.notificationHandler;
-  let timeout = null;
-  let resolveCompleted;
-  let rejectCompleted;
-  const completed = new Promise((resolve, reject) => {
-    resolveCompleted = resolve;
-    rejectCompleted = reject;
-  });
-  void completed.catch(() => {});
-
-  client.setNotificationHandler((message) => {
-    if (message.method === EXTERNAL_AGENT_IMPORT_COMPLETED) {
-      resolveCompleted();
-      return;
-    }
-    previousHandler?.(message);
-  });
-  timeout = setTimeout(() => {
-    rejectCompleted(new Error("Timed out waiting for Codex to finish importing the Claude session."));
-  }, EXTERNAL_AGENT_IMPORT_TIMEOUT_MS);
-
-  try {
-    await client.request("externalAgentConfig/import", params);
-    await completed;
-  } finally {
-    clearTimeout(timeout);
-    client.setNotificationHandler(previousHandler ?? null);
-  }
-}
-
 async function startThread(client, cwd, options = {}) {
   const response = await client.request("thread/start", buildThreadParams(cwd, options));
   const threadId = response.thread.id;
@@ -1406,7 +1320,7 @@ export function getSessionRuntimeStatus(env = process.env, cwd = process.cwd()) 
     return {
       mode: "shared",
       label: "shared session",
-      detail: "This Claude session is configured to reuse one shared Codex runtime.",
+      detail: "This Antigravity session is configured to reuse one shared Codex runtime.",
       endpoint
     };
   }
@@ -1499,7 +1413,7 @@ export async function interruptAppServerTurn(cwd, { threadId, turnId }) {
 export async function runAppServerReview(cwd, options = {}) {
   const availability = getCodexAvailability(cwd);
   if (!availability.available) {
-    throw new Error("Codex CLI is not installed or is missing required runtime support. Install it with `npm install -g @openai/codex`, then rerun `/codex:setup`.");
+    throw new Error("Codex CLI is not installed or is missing required runtime support. Install it with `curl -fsSL https://chatgpt.com/codex/install.sh | sh`, then rerun `/codex-setup`.");
   }
 
   return withAppServer(cwd, async (client) => {
@@ -1553,47 +1467,10 @@ export async function runAppServerReview(cwd, options = {}) {
   });
 }
 
-export async function importExternalAgentSession(cwd, options = {}) {
-  const availability = getCodexAvailability(cwd);
-  if (!availability.available) {
-    throw new Error("Codex CLI is not installed or is missing required runtime support. Install it with `npm install -g @openai/codex`, then rerun `/codex:setup`.");
-  }
-  if (!options.sourcePath) {
-    throw new Error("A Claude session source path is required.");
-  }
-
-  return withDirectAppServer(cwd, async (client) => {
-    emitProgress(options.onProgress, "Importing Claude session into Codex.", "transferring");
-    try {
-      await requestExternalAgentSessionImport(client, externalAgentSessionMigration(options.sourcePath, cwd));
-    } catch (error) {
-      if (error?.rpcCode === -32601) {
-        throw new Error(
-          "This Codex version does not support Claude session transfer. Update Codex with `npm install -g @openai/codex@latest`, then retry.",
-          { cause: error }
-        );
-      }
-      throw error;
-    }
-    const threadId = importedThreadIdForSource(options.sourcePath);
-    if (!threadId) {
-      const stderr = cleanCodexStderr(client.stderr);
-      throw new Error(
-        `Codex reported that the Claude import completed, but did not record an imported thread.${stderr ? `\n${stderr}` : " Check the Codex app-server logs for the underlying import error."}`
-      );
-    }
-    emitProgress(options.onProgress, `Claude session imported (${threadId}).`, "completed", { threadId });
-    return {
-      threadId,
-      stderr: cleanCodexStderr(client.stderr)
-    };
-  });
-}
-
 export async function runAppServerTurn(cwd, options = {}) {
   const availability = getCodexAvailability(cwd);
   if (!availability.available) {
-    throw new Error("Codex CLI is not installed or is missing required runtime support. Install it with `npm install -g @openai/codex`, then rerun `/codex:setup`.");
+    throw new Error("Codex CLI is not installed or is missing required runtime support. Install it with `curl -fsSL https://chatgpt.com/codex/install.sh | sh`, then rerun `/codex-setup`.");
   }
 
   return withAppServer(cwd, async (client) => {
@@ -1751,7 +1628,7 @@ export async function readAppServerThread(cwd, options = {}) {
 export async function findLatestTaskThread(cwd) {
   const availability = getCodexAvailability(cwd);
   if (!availability.available) {
-    throw new Error("Codex CLI is not installed or is missing required runtime support. Install it with `npm install -g @openai/codex`, then rerun `/codex:setup`.");
+    throw new Error("Codex CLI is not installed or is missing required runtime support. Install it with `curl -fsSL https://chatgpt.com/codex/install.sh | sh`, then rerun `/codex-setup`.");
   }
 
   return withAppServer(cwd, async (client) => {
