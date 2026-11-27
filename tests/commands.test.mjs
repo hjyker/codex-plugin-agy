@@ -135,11 +135,14 @@ test("README documents all 9 slash commands and preserves upstream Apache-2.0 at
   assert.match(readme, /### `\/codex-adversarial-review`/);
   assert.match(readme, /--base main --effort high --service-tier fast challenge the caching and retry design/);
   assert.match(readme, /### `\/codex-rescue`/);
+  assert.match(readme, /### `\/codex-read`/);
   assert.match(readme, /### `\/codex-transfer`/);
   assert.match(readme, /### `\/codex-status` \/ `\/codex-result` \/ `\/codex-cancel`/);
   assert.match(readme, /\/codex-setup --enable-review-gate/);
   assert.match(readme, /\/codex-setup --disable-review-gate/);
 
   assert.match(readmeCn, /openai\/codex-plugin-cc/);
+  assert.match(readmeCn, /### `\/codex-read`/);
+  assert.match(pluginReadme, /\/codex-read/);
   assert.match(pluginReadme, /openai\/codex-plugin-cc/);
 });
