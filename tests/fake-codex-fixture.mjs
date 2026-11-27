@@ -39,12 +39,16 @@ function now() {
   return Math.floor(Date.now() / 1000);
 }
 
-function buildThread(thread) {
+function buildThread(thread, options = {}) {
   return {
     id: thread.id,
+    sessionId: thread.sessionId || thread.id,
     preview: thread.preview || "",
     ephemeral: Boolean(thread.ephemeral),
+    historyMode: thread.historyMode || (BEHAVIOR === "paginated-history" ? "paginated" : "legacy"),
     modelProvider: "openai",
+    model: thread.model || "gpt-5.4",
+    reasoningEffort: thread.reasoningEffort || null,
     createdAt: thread.createdAt,
     updatedAt: thread.updatedAt,
     status: { type: "idle" },
@@ -56,7 +60,7 @@ function buildThread(thread) {
     agentRole: null,
     gitInfo: null,
     name: thread.name || null,
-    turns: []
+    turns: options.includeTurns ? (thread.turns || []) : []
   };
 }
 
@@ -123,8 +127,10 @@ function nextThread(state, cwd, ephemeral) {
     name: null,
     preview: "",
     ephemeral: Boolean(ephemeral),
+    historyMode: BEHAVIOR === "paginated-history" ? "paginated" : "legacy",
     createdAt: now(),
-    updatedAt: now()
+    updatedAt: now(),
+    turns: []
   };
   state.threads.unshift(thread);
   saveState(state);
@@ -339,7 +345,85 @@ rl.on("line", (line) => {
           threads = threads.filter((thread) => (thread.name || "").includes(message.params.searchTerm));
         }
         threads.sort((left, right) => right.updatedAt - left.updatedAt);
-        send({ id: message.id, result: { data: threads.map(buildThread), nextCursor: null } });
+        send({ id: message.id, result: { data: threads.map((thread) => buildThread(thread)), nextCursor: null } });
+        break;
+      }
+
+      case "thread/read": {
+        const thread = ensureThread(state, message.params.threadId);
+        state.rpcLog = state.rpcLog || [];
+        state.rpcLog.push({ method: "thread/read", params: message.params });
+        saveState(state);
+        send({
+          id: message.id,
+          result: {
+            thread: buildThread(thread, { includeTurns: Boolean(message.params.includeTurns) })
+          }
+        });
+        break;
+      }
+
+      case "thread/turns/list": {
+        state.rpcLog = state.rpcLog || [];
+        state.rpcLog.push({ method: "thread/turns/list", params: message.params });
+        saveState(state);
+        if (BEHAVIOR === "legacy-read-fallback") {
+          send({ id: message.id, error: { code: -32601, message: "Unsupported method: thread/turns/list" } });
+          break;
+        }
+        const thread = ensureThread(state, message.params.threadId);
+        const turns = (thread.turns || []).slice();
+        const sortDirection = message.params.sortDirection || "desc";
+        const ordered = sortDirection === "asc" ? turns : turns.slice().reverse();
+        const offset = message.params.cursor ? Number(message.params.cursor) : 0;
+        const limit = message.params.limit || ordered.length || 10;
+        const page = ordered.slice(offset, offset + limit).map((turn) => ({
+          ...turn,
+          itemsView: message.params.itemsView === "full" ? "full" : "summary",
+          items: message.params.itemsView === "full" ? turn.items : []
+        }));
+        const nextOffset = offset + page.length;
+        const nextCursor = nextOffset < ordered.length ? String(nextOffset) : null;
+        send({
+          id: message.id,
+          result: {
+            data: page,
+            nextCursor,
+            backwardsCursor: null
+          }
+        });
+        break;
+      }
+
+      case "thread/items/list": {
+        state.rpcLog = state.rpcLog || [];
+        state.rpcLog.push({ method: "thread/items/list", params: message.params });
+        saveState(state);
+        const thread = ensureThread(state, message.params.threadId);
+        const targetTurns = message.params.turnId
+          ? (thread.turns || []).filter((turn) => turn.id === message.params.turnId)
+          : thread.turns || [];
+        const allEntries = targetTurns.flatMap((turn) =>
+          (turn.items || []).map((item) => ({
+            turnId: turn.id,
+            item,
+            startedAtMs: null,
+            completedAtMs: null
+          }))
+        );
+        const offset = message.params.cursor ? Number(message.params.cursor) : 0;
+        const limit = message.params.limit || allEntries.length || 200;
+        const page = allEntries.slice(offset, offset + limit);
+        const nextOffset = offset + page.length;
+        const nextCursor = nextOffset < allEntries.length ? String(nextOffset) : null;
+        send({
+          id: message.id,
+          result: {
+            data: page,
+            nextCursor,
+            backwardsCursor: null
+          }
+        });
         break;
       }
 
@@ -468,6 +552,58 @@ rl.on("line", (line) => {
         const payload = message.params.outputSchema && message.params.outputSchema.properties && message.params.outputSchema.properties.verdict
           ? structuredReviewPayload(prompt)
           : taskPayload(prompt, thread.name && thread.name.startsWith("Codex Companion Task") && prompt.includes("Continue from the current thread state"));
+
+        const recordedItems = [
+          {
+            type: "userMessage",
+            id: "usr_" + turnId,
+            clientId: null,
+            content: [{ type: "text", text: prompt, text_elements: [] }]
+          },
+          {
+            type: "commandExecution",
+            id: "cmd_" + turnId,
+            pluginId: null,
+            scriptPath: null,
+            command: "echo verified",
+            cwd: thread.cwd,
+            processId: null,
+            source: "agent",
+            status: "completed",
+            commandActions: [],
+            aggregatedOutput: "verified\\n",
+            exitCode: 0,
+            durationMs: 12
+          },
+          {
+            type: "agentMessage",
+            id: "commentary_" + turnId,
+            text: "Checking repository state before answering.",
+            phase: "commentary"
+          },
+          {
+            type: "agentMessage",
+            id: "msg_" + turnId,
+            text: payload,
+            phase: "final_answer"
+          }
+        ];
+        thread.turns = thread.turns || [];
+        thread.turns.push({
+          id: turnId,
+          rootTurnId: null,
+          items: recordedItems,
+          itemsView: "full",
+          status: "completed",
+          error: null,
+          startedAt: now(),
+          completedAt: now(),
+          durationMs: 42
+        });
+        if (!thread.preview) {
+          thread.preview = prompt;
+        }
+        saveState(state);
 
         if (
           BEHAVIOR === "with-subagent" ||

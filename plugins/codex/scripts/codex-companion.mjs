@@ -17,13 +17,16 @@ import {
 import {
     buildPersistentTaskThreadName,
     DEFAULT_CONTINUE_PROMPT,
+    DEFAULT_READ_LIMIT,
     findLatestTaskThread,
     getCodexAuthStatus,
     getCodexAvailability,
     getSessionRuntimeStatus,
     importExternalAgentSession,
     interruptAppServerTurn,
+    parseCodexThreadRef,
     parseStructuredOutput,
+    readAppServerThread,
     readOutputSchema,
     runAppServerReview,
     runAppServerTurn
@@ -69,7 +72,8 @@ import {
   renderJobStatusReport,
   renderSetupReport,
   renderStatusReport,
-  renderTaskResult
+  renderTaskResult,
+  renderThreadReadResult
 } from "./lib/render.mjs";
 
 const ROOT_DIR = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
@@ -88,7 +92,8 @@ function printUsage() {
       "  codex-companion setup [--enable-review-gate|--disable-review-gate] [--json]",
       "  codex-companion review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>] [--model <model>] [--service-tier <fast|flex>]",
       "  codex-companion adversarial-review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>] [--model <model>] [--effort <low|medium|high|xhigh|max|ultra>] [--service-tier <fast|flex>] [focus text]",
-      "  codex-companion task [--background] [--write] [--sandbox <read-only|workspace-write|danger-full-access>] [--resume-last|--resume|--thread-id <id>|--fresh] [--model <model>] [--effort <low|medium|high|xhigh|max|ultra>] [--service-tier <fast|flex>] [--prompt-file <path>] [prompt]",
+      "  codex-companion task [--background] [--write] [--sandbox <read-only|workspace-write|danger-full-access>] [--resume-last|--resume|--thread-id <id|deeplink>|--fresh] [--model <model>] [--effort <low|medium|high|xhigh|max|ultra>] [--service-tier <fast|flex>] [--prompt-file <path>] [prompt]",
+      "  codex-companion read <thread-id|codex://threads/<id>> [--limit <n>] [--all] [--include-tools] [--json]",
       "  codex-companion transfer [--handoff <text>|--handoff-file <path>|--source <jsonl>] [--title <name>] [--model <model>] [--json]",
       "  codex-companion status [job-id] [--all] [--json]",
       "  codex-companion result [job-id] [--json]",
@@ -504,7 +509,7 @@ async function executeTaskRun(request) {
     resumeLast: Boolean(request.resumeLast || request.threadId)
   });
 
-  let resumeThreadId = request.threadId ? String(request.threadId).trim() : null;
+  let resumeThreadId = parseCodexThreadRef(request.threadId);
   if (!resumeThreadId && request.resumeLast) {
     const latestThread = await resolveLatestTrackedTaskThread(workspaceRoot, {
       excludeJobId: request.jobId
@@ -911,7 +916,7 @@ async function handleTask(argv) {
   const effort = normalizeReasoningEffort(options.effort);
   const serviceTier = normalizeServiceTier(options["service-tier"]);
   const explicitSandbox = normalizeSandboxMode(options.sandbox);
-  const threadId = options["thread-id"] ? String(options["thread-id"]).trim() : null;
+  const threadId = parseCodexThreadRef(options["thread-id"]);
   const prompt = readTaskPrompt(cwd, options, positionals);
 
   const resumeLast = Boolean(options["resume-last"] || options.resume);
@@ -967,6 +972,44 @@ async function handleTask(argv) {
       }),
     { json: options.json }
   );
+}
+
+function normalizeReadLimit(rawLimit) {
+  if (rawLimit == null || rawLimit === "") {
+    return DEFAULT_READ_LIMIT;
+  }
+  const parsed = Number(rawLimit);
+  if (!Number.isInteger(parsed) || parsed < 1) {
+    throw new Error(`Unsupported --limit "${rawLimit}". Use a positive integer (for example: --limit 10).`);
+  }
+  return parsed;
+}
+
+async function handleRead(argv) {
+  const { options, positionals } = parseCommandInput(argv, {
+    valueOptions: ["cwd", "limit", "thread-id"],
+    booleanOptions: ["all", "include-tools", "json"],
+    aliasMap: {
+      n: "limit"
+    }
+  });
+
+  const cwd = resolveCommandCwd(options);
+  const rawRef = options["thread-id"] ?? positionals[0] ?? "";
+  const threadId = parseCodexThreadRef(rawRef);
+  if (!threadId) {
+    throw new Error("Usage: codex-companion read <thread-id | codex://threads/<id>> [--limit <n>] [--all] [--include-tools] [--json]");
+  }
+
+  const all = Boolean(options.all);
+  const limit = all ? null : normalizeReadLimit(options.limit);
+  const payload = await readAppServerThread(cwd, {
+    threadId,
+    limit,
+    all,
+    includeTools: Boolean(options["include-tools"])
+  });
+  outputCommandResult(payload, renderThreadReadResult(payload), options.json);
 }
 
 async function handleTransfer(argv) {
@@ -1227,6 +1270,9 @@ async function main() {
       break;
     case "task":
       await handleTask(argv);
+      break;
+    case "read":
+      await handleRead(argv);
       break;
     case "transfer":
       await handleTransfer(argv);

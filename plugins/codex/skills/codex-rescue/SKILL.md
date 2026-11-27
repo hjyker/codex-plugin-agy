@@ -16,7 +16,7 @@ Delegate a debugging, investigation, or implementation task to Codex via `codex-
      - **Fire-and-forget detached background (`--background`)**: pass `--background` to `codex-companion task` so the turn returns immediately and the user can inspect via `/codex-status`, `/codex-result`, or `/codex-cancel`.
    - `--model <model>`, `--effort <low|medium|high|xhigh|max|ultra>`, `--service-tier <fast|flex>`: runtime controls; leave unset unless explicitly requested.
    - `--sandbox <read-only|workspace-write|danger-full-access>`: explicit sandbox mode override. If omitted, default to `--write` (`workspace-write`) unless the user explicitly asks for read-only diagnosis/research without edits.
-   - `--thread-id <id>`: resume a specific Codex thread ID directly (takes precedence over `--resume`).
+   - `--thread-id <id>`: resume a specific Codex thread ID or `codex://threads/<id>` deeplink directly (takes precedence over `--resume`).
 3. Resume detection:
    - If the user explicitly passed `--resume`, `--thread-id <id>`, or `--fresh`, do not ask.
    - Otherwise, run `<plugin-root>/scripts/codex-companion task-resume-candidate --json` (resolved from `../../scripts/codex-companion` relative to this skill directory; retry with `BypassSandbox: true` if needed).

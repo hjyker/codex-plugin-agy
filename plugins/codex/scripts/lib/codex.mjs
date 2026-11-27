@@ -46,6 +46,8 @@ import { binaryAvailable } from "./process.mjs";
 
 const SERVICE_NAME = "antigravity_codex_plugin";
 const TASK_THREAD_PREFIX = "Codex Companion Task";
+const DEFAULT_READ_LIMIT = 10;
+const CODEX_THREAD_DEEPLINK_RE = /^codex:\/\/threads\/([^/?#\s]+)(?:\/?(?:[?#].*)?)?$/i;
 const DEFAULT_CONTINUE_PROMPT =
   "Continue from the current thread state. Pick the next highest-value step and follow through until the task is resolved.";
 const EXTERNAL_AGENT_IMPORT_COMPLETED = "externalAgentConfig/import/completed";
@@ -652,6 +654,499 @@ async function withDirectAppServer(cwd, fn) {
   }
 }
 
+async function withReadOnlyAppServer(cwd, fn) {
+  let client = null;
+  const brokerConfigured = Boolean(process.env[BROKER_ENDPOINT_ENV] || loadBrokerSession(cwd)?.endpoint);
+  try {
+    client = await CodexAppServerClient.connect(cwd, { reuseExistingBroker: true });
+    const result = await fn(client);
+    await client.close();
+    return result;
+  } catch (error) {
+    const brokerRequested = client?.transport === "broker" || brokerConfigured;
+    const shouldRetryDirect =
+      (client?.transport === "broker" && error?.rpcCode === BROKER_BUSY_RPC_CODE) ||
+      (brokerRequested && (error?.code === "ENOENT" || error?.code === "ECONNREFUSED"));
+
+    if (client) {
+      await client.close().catch(() => {});
+      client = null;
+    }
+
+    if (!shouldRetryDirect) {
+      throw error;
+    }
+
+    return withDirectAppServer(cwd, fn);
+  }
+}
+
+export function parseCodexThreadRef(raw) {
+  if (raw == null) {
+    return null;
+  }
+  const trimmed = String(raw).trim();
+  if (!trimmed) {
+    return null;
+  }
+  if (/^codex:\/\//i.test(trimmed)) {
+    const match = trimmed.match(CODEX_THREAD_DEEPLINK_RE);
+    if (!match) {
+      throw new Error(
+        `Invalid Codex thread deeplink "${trimmed}". Expected "codex://threads/<thread-id>" or a raw thread ID.`
+      );
+    }
+    let decoded;
+    try {
+      decoded = decodeURIComponent(match[1]).trim();
+    } catch {
+      decoded = match[1].trim();
+    }
+    if (!decoded || /\s/.test(decoded)) {
+      throw new Error(
+        `Invalid Codex thread deeplink "${trimmed}". Expected "codex://threads/<thread-id>" or a raw thread ID.`
+      );
+    }
+    return decoded;
+  }
+  if (/\s/.test(trimmed)) {
+    throw new Error(`Invalid Codex thread ID "${trimmed}". Expected a thread ID or "codex://threads/<thread-id>".`);
+  }
+  return trimmed;
+}
+
+function isUnsupportedRpcMethodError(error) {
+  if (error?.rpcCode === -32601) {
+    return true;
+  }
+  const message = String(error?.message ?? error ?? "");
+  return /unknown variant|unknown method|unsupported method|method not found/i.test(message);
+}
+
+function formatUnixTimestampIso(value) {
+  if (value == null) {
+    return null;
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed || null;
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    const ms = value > 1e12 ? value : value * 1000;
+    const date = new Date(ms);
+    return Number.isNaN(date.getTime()) ? null : date.toISOString();
+  }
+  return null;
+}
+
+function truncatePreview(text, maxLength = 400) {
+  const value = String(text ?? "").trim();
+  if (!value) {
+    return null;
+  }
+  if (value.length <= maxLength) {
+    return value;
+  }
+  return `${value.slice(0, maxLength - 3)}...`;
+}
+
+function formatUserInputPart(part) {
+  if (!part || typeof part !== "object") {
+    return "";
+  }
+  switch (part.type) {
+    case "text":
+      return typeof part.text === "string" ? part.text : "";
+    case "image":
+      return `[image: ${part.url ?? part.fileId ?? "image"}]`;
+    case "localImage":
+      return `[image: ${part.path ?? "local image"}]`;
+    case "audio":
+      return `[audio: ${part.url ?? part.fileId ?? "audio"}]`;
+    case "localAudio":
+      return `[audio: ${part.path ?? "local audio"}]`;
+    case "skill":
+      return `[skill: ${part.name ?? part.path ?? "skill"}]`;
+    case "mention":
+      return part.path ? `@${part.name ?? "file"} (${part.path})` : `@${part.name ?? "mention"}`;
+    default:
+      return typeof part.text === "string" ? part.text : "";
+  }
+}
+
+function extractUserMessageText(item) {
+  if (Array.isArray(item?.content)) {
+    return item.content
+      .map(formatUserInputPart)
+      .filter((chunk) => chunk.length > 0)
+      .join("\n")
+      .trim();
+  }
+  if (typeof item?.text === "string") {
+    return item.text.trim();
+  }
+  return "";
+}
+
+function formatThreadStatus(status) {
+  if (!status) {
+    return null;
+  }
+  if (typeof status === "string") {
+    return status;
+  }
+  if (typeof status === "object" && typeof status.type === "string") {
+    if (status.type === "active" && Array.isArray(status.activeFlags) && status.activeFlags.length > 0) {
+      return `${status.type} (${status.activeFlags.join(", ")})`;
+    }
+    return status.type;
+  }
+  return null;
+}
+
+function formatSessionSource(source) {
+  if (!source) {
+    return null;
+  }
+  if (typeof source === "string") {
+    return source;
+  }
+  if (typeof source === "object") {
+    if (typeof source.type === "string") {
+      return source.type;
+    }
+    const keys = Object.keys(source);
+    if (keys.length === 1) {
+      return keys[0];
+    }
+  }
+  return null;
+}
+
+function summarizeToolItem(item) {
+  if (!item || typeof item !== "object" || !item.type) {
+    return null;
+  }
+  switch (item.type) {
+    case "userMessage":
+    case "agentMessage":
+    case "hookPrompt":
+      return null;
+    case "commandExecution":
+      return {
+        type: "commandExecution",
+        id: item.id ?? null,
+        command: item.command ?? "",
+        cwd: item.cwd ?? null,
+        status: item.status ?? null,
+        exitCode: item.exitCode ?? null,
+        durationMs: item.durationMs ?? null,
+        outputPreview: truncatePreview(item.aggregatedOutput, 400)
+      };
+    case "fileChange":
+      return {
+        type: "fileChange",
+        id: item.id ?? null,
+        status: item.status ?? null,
+        changes: Array.isArray(item.changes)
+          ? item.changes.map((change) => ({
+              path: change?.path ?? "unknown",
+              kind: typeof change?.kind === "string" ? change.kind : change?.kind?.type ?? "update"
+            }))
+          : []
+      };
+    case "mcpToolCall":
+      return {
+        type: "mcpToolCall",
+        id: item.id ?? null,
+        server: item.server ?? null,
+        tool: item.tool ?? null,
+        status: item.status ?? null,
+        durationMs: item.durationMs ?? null,
+        error: typeof item.error === "string" ? item.error : item.error?.message ?? null
+      };
+    case "dynamicToolCall":
+      return {
+        type: "dynamicToolCall",
+        id: item.id ?? null,
+        namespace: item.namespace ?? null,
+        tool: item.tool ?? null,
+        status: item.status ?? null,
+        success: item.success ?? null,
+        durationMs: item.durationMs ?? null
+      };
+    case "collabAgentToolCall":
+      return {
+        type: "collabAgentToolCall",
+        id: item.id ?? null,
+        tool: item.tool ?? null,
+        status: item.status ?? null,
+        receiverThreadIds: Array.isArray(item.receiverThreadIds) ? item.receiverThreadIds : [],
+        prompt: truncatePreview(item.prompt, 200)
+      };
+    case "webSearch":
+      return {
+        type: "webSearch",
+        id: item.id ?? null,
+        query: item.query ?? item.action?.query ?? null
+      };
+    case "plan": {
+      const text = String(item.text ?? "").trim();
+      return text ? { type: "plan", id: item.id ?? null, text } : null;
+    }
+    case "reasoning": {
+      const summary = extractReasoningSections(item.summary);
+      return summary.length > 0 ? { type: "reasoning", id: item.id ?? null, summary } : null;
+    }
+    case "enteredReviewMode":
+      return {
+        type: "enteredReviewMode",
+        id: item.id ?? null,
+        review: item.review ?? ""
+      };
+    case "exitedReviewMode":
+      return null;
+    case "imageView":
+      return {
+        type: "imageView",
+        id: item.id ?? null,
+        path: item.path ?? null
+      };
+    case "subAgentActivity":
+      return {
+        type: "subAgentActivity",
+        id: item.id ?? null,
+        kind: item.kind ?? null,
+        agentThreadId: item.agentThreadId ?? null,
+        agentPath: item.agentPath ?? null
+      };
+    case "contextCompaction":
+      return {
+        type: "contextCompaction",
+        id: item.id ?? null
+      };
+    case "functionCallOutput":
+      return {
+        type: "functionCallOutput",
+        id: item.id ?? null,
+        name: item.name ?? null,
+        namespace: item.namespace ?? null
+      };
+    default:
+      return {
+        type: item.type,
+        id: item.id ?? null
+      };
+  }
+}
+
+function normalizeReadTurn(turn, index, options = {}) {
+  const items = Array.isArray(turn?.items) ? turn.items : [];
+  const userMessages = [];
+  const allAssistantMessages = [];
+  const toolItems = [];
+
+  for (const item of items) {
+    if (!item || typeof item !== "object") {
+      continue;
+    }
+    if (item.type === "userMessage") {
+      const text = extractUserMessageText(item);
+      if (text) {
+        userMessages.push(text);
+      }
+      continue;
+    }
+    if (item.type === "agentMessage") {
+      const text = typeof item.text === "string" ? item.text.trim() : "";
+      if (text) {
+        allAssistantMessages.push({
+          id: item.id ?? null,
+          phase: item.phase ?? null,
+          text
+        });
+      }
+      continue;
+    }
+    if (item.type === "exitedReviewMode") {
+      const text = typeof item.review === "string" ? item.review.trim() : "";
+      if (text) {
+        allAssistantMessages.push({
+          id: item.id ?? null,
+          phase: "review",
+          text
+        });
+      }
+      continue;
+    }
+    const summarized = summarizeToolItem(item);
+    if (summarized) {
+      toolItems.push(summarized);
+    }
+  }
+
+  const hasFinalMessage = allAssistantMessages.some(
+    (entry) => entry.phase === "final_answer" || entry.phase === "review"
+  );
+  const assistantMessages =
+    options.includeTools || !hasFinalMessage
+      ? allAssistantMessages
+      : allAssistantMessages.filter((entry) => entry.phase !== "commentary");
+
+  return {
+    index,
+    id: turn?.id ?? null,
+    status: turn?.status ?? null,
+    error: turn?.error?.message ?? (typeof turn?.error === "string" ? turn.error : null),
+    startedAt: formatUnixTimestampIso(turn?.startedAt),
+    completedAt: formatUnixTimestampIso(turn?.completedAt),
+    durationMs: typeof turn?.durationMs === "number" ? turn.durationMs : null,
+    userMessages,
+    assistantMessages,
+    toolCount: toolItems.length,
+    tools: options.includeTools ? toolItems : []
+  };
+}
+
+async function fetchTurnItemsList(client, threadId, turnId) {
+  const items = [];
+  const seenCursors = new Set();
+  let cursor = null;
+
+  while (true) {
+    const response = await client.request("thread/items/list", {
+      threadId,
+      turnId,
+      limit: 200,
+      sortDirection: "asc",
+      ...(cursor ? { cursor } : {})
+    });
+    const page = Array.isArray(response?.data) ? response.data : [];
+    for (const entry of page) {
+      if (entry?.item && typeof entry.item === "object") {
+        items.push({
+          ...entry.item,
+          ...(entry.startedAtMs != null && entry.item.startedAtMs == null ? { startedAtMs: entry.startedAtMs } : {}),
+          ...(entry.completedAtMs != null && entry.item.completedAtMs == null
+            ? { completedAtMs: entry.completedAtMs }
+            : {})
+        });
+      } else if (entry && typeof entry === "object" && entry.type) {
+        items.push(entry);
+      }
+    }
+    const nextCursor = response?.nextCursor ?? null;
+    if (!nextCursor || seenCursors.has(nextCursor)) {
+      break;
+    }
+    seenCursors.add(nextCursor);
+    cursor = nextCursor;
+  }
+
+  return items;
+}
+
+async function fetchPaginatedTurnsHistory(client, threadId, options = {}) {
+  const all = Boolean(options.all);
+  const limit = all ? null : options.limit;
+  const collectedDesc = [];
+  const seenCursors = new Set();
+  let cursor = null;
+  let lastNextCursor = null;
+
+  while (true) {
+    const remaining = all ? 100 : Math.min(Math.max(limit - collectedDesc.length, 1), 100);
+    const response = await client.request("thread/turns/list", {
+      threadId,
+      limit: remaining,
+      sortDirection: "desc",
+      itemsView: "summary",
+      ...(cursor ? { cursor } : {})
+    });
+    const page = Array.isArray(response?.data) ? response.data : [];
+    collectedDesc.push(...page);
+    lastNextCursor = response?.nextCursor ?? null;
+
+    if (!all && collectedDesc.length >= limit) {
+      break;
+    }
+    if (!lastNextCursor || page.length === 0 || seenCursors.has(lastNextCursor)) {
+      break;
+    }
+    seenCursors.add(lastNextCursor);
+    cursor = lastNextCursor;
+  }
+
+  const hasMore = !all && (Boolean(lastNextCursor) || collectedDesc.length > limit);
+  const selectedDesc = all ? collectedDesc : collectedDesc.slice(0, limit);
+  const selectedTurns = [...selectedDesc].reverse();
+
+  const hydratedTurns = [];
+  for (const turn of selectedTurns) {
+    let items = Array.isArray(turn?.items) ? turn.items : [];
+    if (turn?.id) {
+      try {
+        items = await fetchTurnItemsList(client, threadId, turn.id);
+      } catch (error) {
+        if (!isUnsupportedRpcMethodError(error)) {
+          throw error;
+        }
+      }
+    }
+    hydratedTurns.push({
+      ...turn,
+      items
+    });
+  }
+
+  return {
+    turns: hydratedTurns,
+    hasMore,
+    totalTurns: hasMore ? null : hydratedTurns.length,
+    startIndex: 1
+  };
+}
+
+async function fetchLegacyTurnsHistory(client, threadId, options = {}) {
+  const all = Boolean(options.all);
+  const limit = all ? null : options.limit;
+  const response = await client.request("thread/read", {
+    threadId,
+    includeTurns: true
+  });
+  const thread = response?.thread ?? null;
+  const allTurns = Array.isArray(thread?.turns) ? thread.turns : [];
+  const selectedTurns = all ? allTurns : allTurns.slice(-limit);
+  const hasMore = !all && allTurns.length > selectedTurns.length;
+  const startIndex = allTurns.length - selectedTurns.length + 1;
+
+  const hydratedTurns = [];
+  for (const turn of selectedTurns) {
+    let items = Array.isArray(turn?.items) ? turn.items : [];
+    if (turn?.id && turn.itemsView && turn.itemsView !== "full" && items.length === 0) {
+      try {
+        items = await fetchTurnItemsList(client, threadId, turn.id);
+      } catch (error) {
+        if (!isUnsupportedRpcMethodError(error)) {
+          throw error;
+        }
+      }
+    }
+    hydratedTurns.push({
+      ...turn,
+      items
+    });
+  }
+
+  return {
+    thread,
+    turns: hydratedTurns,
+    hasMore,
+    totalTurns: allTurns.length,
+    startIndex
+  };
+}
+
 function resolveCodexHome() {
   return path.resolve(process.env.CODEX_HOME || path.join(os.homedir(), ".codex"));
 }
@@ -1165,6 +1660,94 @@ export async function runAppServerTurn(cwd, options = {}) {
   });
 }
 
+export async function readAppServerThread(cwd, options = {}) {
+  const availability = getCodexAvailability(cwd);
+  if (!availability.available) {
+    throw new Error("Codex CLI is not installed or is missing required runtime support. Install it with `curl -fsSL https://chatgpt.com/codex/install.sh | sh`, then rerun `/codex-setup`.");
+  }
+
+  const threadId = parseCodexThreadRef(options.threadId);
+  if (!threadId) {
+    throw new Error("Provide a Codex thread ID or `codex://threads/<thread-id>` deeplink.");
+  }
+
+  const all = Boolean(options.all);
+  const includeTools = Boolean(options.includeTools);
+  const limit = all ? null : options.limit ?? DEFAULT_READ_LIMIT;
+
+  return withReadOnlyAppServer(cwd, async (client) => {
+    const metaResponse = await client.request("thread/read", {
+      threadId,
+      includeTurns: false
+    });
+    let thread = metaResponse?.thread ?? null;
+    if (!thread) {
+      throw new Error(`Codex thread "${threadId}" was not found.`);
+    }
+
+    let historySource = "legacy";
+    let history;
+    if (thread.historyMode === "paginated") {
+      try {
+        history = await fetchPaginatedTurnsHistory(client, threadId, { all, limit });
+        historySource = "paginated";
+      } catch (error) {
+        if (!isUnsupportedRpcMethodError(error)) {
+          throw error;
+        }
+        const legacy = await fetchLegacyTurnsHistory(client, threadId, { all, limit });
+        thread = legacy.thread ?? thread;
+        history = legacy;
+        historySource = "legacy";
+      }
+    } else {
+      const legacy = await fetchLegacyTurnsHistory(client, threadId, { all, limit });
+      thread = legacy.thread ?? thread;
+      history = legacy;
+      historySource = "legacy";
+    }
+
+    const turns = history.turns.map((turn, offset) =>
+      normalizeReadTurn(turn, history.startIndex + offset, { includeTools })
+    );
+
+    return {
+      threadId: thread.id ?? threadId,
+      deeplink: `codex://threads/${thread.id ?? threadId}`,
+      resumeCommand: `codex resume ${thread.id ?? threadId}`,
+      historySource,
+      includeTools,
+      thread: {
+        id: thread.id ?? threadId,
+        sessionId: thread.sessionId ?? null,
+        name: thread.name ?? null,
+        preview: thread.preview ?? "",
+        cwd: thread.cwd ?? null,
+        status: formatThreadStatus(thread.status),
+        historyMode: thread.historyMode ?? null,
+        modelProvider: thread.modelProvider ?? null,
+        model: thread.model ?? null,
+        reasoningEffort: thread.reasoningEffort ?? null,
+        source: formatSessionSource(thread.source),
+        cliVersion: thread.cliVersion ?? null,
+        originator: thread.originator ?? null,
+        ephemeral: Boolean(thread.ephemeral),
+        createdAt: formatUnixTimestampIso(thread.createdAt),
+        updatedAt: formatUnixTimestampIso(thread.updatedAt),
+        gitInfo: thread.gitInfo ?? null
+      },
+      pagination: {
+        limit,
+        all,
+        returnedTurns: turns.length,
+        totalTurns: history.totalTurns,
+        hasMore: Boolean(history.hasMore)
+      },
+      turns
+    };
+  });
+}
+
 export async function findLatestTaskThread(cwd) {
   const availability = getCodexAvailability(cwd);
   if (!availability.available) {
@@ -1222,4 +1805,4 @@ export function readOutputSchema(schemaPath) {
   return readJsonFile(schemaPath);
 }
 
-export { DEFAULT_CONTINUE_PROMPT, TASK_THREAD_PREFIX };
+export { DEFAULT_CONTINUE_PROMPT, DEFAULT_READ_LIMIT, TASK_THREAD_PREFIX };

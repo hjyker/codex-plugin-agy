@@ -28,7 +28,7 @@ Forwarding rules:
 - If the user asks for a concrete model name such as `gpt-6.2-sol` or `gpt-6.2-astra`, pass it through with `--model`.
 - Default to a write-capable Codex run by adding `--write` (or pass `--sandbox <mode>` if explicitly requested, such as `--sandbox danger-full-access`) unless the user explicitly asks for read-only behavior or only wants review, diagnosis, or research without edits.
 - Treat `--resume`, `--thread-id <id>`, and `--fresh` as routing controls and do not include them in the task text you pass through.
-- `--thread-id <id>` passes `--thread-id <id>` directly to `task`.
+- `--thread-id <id>` passes `--thread-id <id>` directly to `task` (accepts both raw thread IDs and `codex://threads/<id>` deeplinks).
 - `--resume` means add `--resume-last`.
 - `--fresh` means do not add `--resume-last`.
 - If the user is clearly asking to continue prior Codex work in this repository, such as "continue", "keep going", "resume", "apply the top fix", or "dig deeper", add `--resume-last` unless `--fresh` is present.

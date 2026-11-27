@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { buildEnv, installFakeCodex } from "./fake-codex-fixture.mjs";
 import { initGitRepo, makeTempDir, run } from "./helpers.mjs";
 import { ensureBrokerSession } from "../plugins/codex/scripts/lib/broker-lifecycle.mjs";
+import { parseCodexThreadRef } from "../plugins/codex/scripts/lib/codex.mjs";
 import { loadActiveSession, resolveStateDir, saveActiveSession, setConfig } from "../plugins/codex/scripts/lib/state.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -58,12 +59,13 @@ test("AGY plugin.json uses only allowlisted top-level fields and root hooks.json
   assert.doesNotMatch(installScript, /\.local\/bin/);
 });
 
-test("all 8 AGY slash-command skills and rescue agent follow Antigravity conventions", () => {
+test("all 9 AGY slash-command skills and rescue agent follow Antigravity conventions", () => {
   const expectedSkills = [
     "codex-setup",
     "codex-review",
     "codex-adversarial-review",
     "codex-rescue",
+    "codex-read",
     "codex-transfer",
     "codex-status",
     "codex-result",
@@ -402,5 +404,117 @@ test("bundled scripts/codex-companion runs self-contained without global PATH in
     true,
     "Bundled launcher should default state into $HOME/.codex-plugin-agy"
   );
+});
+
+
+test("parseCodexThreadRef parses raw IDs and codex://threads/<id> deeplinks", () => {
+  const uuid = "0195a3f0-0000-7000-8000-000000000001";
+  assert.equal(parseCodexThreadRef(uuid), uuid);
+  assert.equal(parseCodexThreadRef(`codex://threads/${uuid}`), uuid);
+  assert.equal(parseCodexThreadRef(`CODEX://threads/${uuid}/?source=app#top`), uuid);
+  assert.equal(parseCodexThreadRef(`  codex://threads/${uuid}  `), uuid);
+  assert.equal(parseCodexThreadRef(""), null);
+  assert.equal(parseCodexThreadRef(null), null);
+  assert.throws(() => parseCodexThreadRef("codex://other/123"), /Invalid Codex thread deeplink/);
+  assert.throws(() => parseCodexThreadRef("codex://threads/"), /Invalid Codex thread deeplink/);
+  assert.throws(() => parseCodexThreadRef("bad thread id"), /Invalid Codex thread ID/);
+});
+
+test("read fetches paginated thread history via thread/read + thread/turns/list + thread/items/list and honors flags", () => {
+  const repo = makeTempDir();
+  const binDir = makeTempDir();
+  installFakeCodex(binDir, "paginated-history");
+  initGitRepo(repo);
+
+  const env = buildEnv(binDir);
+  const first = run("node", [SCRIPT, "task", "--json", "first question"], { cwd: repo, env });
+  assert.equal(first.status, 0, first.stderr);
+  const { threadId } = JSON.parse(first.stdout);
+
+  // Also verify task --thread-id accepts codex://threads/<id> deeplink!
+  const second = run(
+    "node",
+    [SCRIPT, "task", "--thread-id", `codex://threads/${threadId}`, "--json", "second question"],
+    { cwd: repo, env }
+  );
+  assert.equal(second.status, 0, second.stderr);
+  assert.equal(JSON.parse(second.stdout).threadId, threadId);
+
+  const third = run(
+    "node",
+    [SCRIPT, "task", "--thread-id", `codex://threads/${threadId}`, "--json", "third question"],
+    { cwd: repo, env }
+  );
+  assert.equal(third.status, 0, third.stderr);
+
+  // Read latest 2 turns via deeplink in JSON mode (default excludes tools & commentary).
+  const readLimited = run(
+    "node",
+    [SCRIPT, "read", `codex://threads/${threadId}`, "--limit", "2", "--json"],
+    { cwd: repo, env }
+  );
+  assert.equal(readLimited.status, 0, readLimited.stderr);
+  const limitedPayload = JSON.parse(readLimited.stdout);
+  assert.equal(limitedPayload.threadId, threadId);
+  assert.equal(limitedPayload.deeplink, `codex://threads/${threadId}`);
+  assert.equal(limitedPayload.historySource, "paginated");
+  assert.equal(limitedPayload.pagination.returnedTurns, 2);
+  assert.equal(limitedPayload.pagination.hasMore, true);
+  assert.deepEqual(
+    limitedPayload.turns.map((turn) => turn.userMessages[0]),
+    ["second question", "third question"]
+  );
+  assert.equal(limitedPayload.turns[0].tools.length, 0);
+  assert.equal(limitedPayload.turns[0].toolCount, 1);
+  assert.equal(limitedPayload.turns[0].assistantMessages.length, 1);
+  assert.equal(limitedPayload.turns[0].assistantMessages[0].phase, "final_answer");
+
+  // Verify RPC sequence used paginated methods (thread/read includeTurns=false -> thread/turns/list -> thread/items/list).
+  const fakeState = JSON.parse(fs.readFileSync(path.join(binDir, "fake-codex-state.json"), "utf8"));
+  const methods = (fakeState.rpcLog || []).map((entry) => entry.method);
+  assert.ok(methods.includes("thread/read"));
+  assert.ok(methods.includes("thread/turns/list"));
+  assert.ok(methods.includes("thread/items/list"));
+  assert.equal(fakeState.rpcLog.find((entry) => entry.method === "thread/read").params.includeTurns, false);
+
+  // Read all turns with --include-tools in Markdown mode.
+  const readAllMarkdown = run(
+    "node",
+    [SCRIPT, "read", threadId, "--all", "--include-tools"],
+    { cwd: repo, env }
+  );
+  assert.equal(readAllMarkdown.status, 0, readAllMarkdown.stderr);
+  assert.match(readAllMarkdown.stdout, /# Codex Thread/);
+  assert.match(readAllMarkdown.stdout, /first question/);
+  assert.match(readAllMarkdown.stdout, /second question/);
+  assert.match(readAllMarkdown.stdout, /third question/);
+  assert.match(readAllMarkdown.stdout, /### Tools & Activity/);
+  assert.match(readAllMarkdown.stdout, /\[command\] `echo verified`/);
+  assert.match(readAllMarkdown.stdout, /\[commentary\] Checking repository state/);
+});
+
+test("read supports legacy historyMode via thread/read({ includeTurns: true })", () => {
+  const repo = makeTempDir();
+  const binDir = makeTempDir();
+  installFakeCodex(binDir);
+  initGitRepo(repo);
+
+  const env = buildEnv(binDir);
+  const first = run("node", [SCRIPT, "task", "--json", "legacy turn 1"], { cwd: repo, env });
+  assert.equal(first.status, 0, first.stderr);
+  const { threadId } = JSON.parse(first.stdout);
+
+  const second = run("node", [SCRIPT, "task", "--thread-id", threadId, "--json", "legacy turn 2"], { cwd: repo, env });
+  assert.equal(second.status, 0, second.stderr);
+
+  const readRes = run("node", [SCRIPT, "read", threadId, "--limit", "1", "--json"], { cwd: repo, env });
+  assert.equal(readRes.status, 0, readRes.stderr);
+  const payload = JSON.parse(readRes.stdout);
+  assert.equal(payload.historySource, "legacy");
+  assert.equal(payload.pagination.totalTurns, 2);
+  assert.equal(payload.pagination.returnedTurns, 1);
+  assert.equal(payload.pagination.hasMore, true);
+  assert.equal(payload.turns[0].index, 2);
+  assert.equal(payload.turns[0].userMessages[0], "legacy turn 2");
 });
 

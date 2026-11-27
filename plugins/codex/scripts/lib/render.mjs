@@ -463,3 +463,200 @@ export function renderCancelReport(job) {
 
   return `${lines.join("\n").trimEnd()}\n`;
 }
+
+function formatReadDuration(durationMs) {
+  if (typeof durationMs !== "number" || !Number.isFinite(durationMs) || durationMs < 0) {
+    return null;
+  }
+  if (durationMs < 1000) {
+    return `${Math.round(durationMs)}ms`;
+  }
+  const seconds = durationMs / 1000;
+  if (seconds < 60) {
+    return `${seconds.toFixed(1)}s`;
+  }
+  const minutes = Math.floor(seconds / 60);
+  const remSeconds = Math.round(seconds % 60);
+  return `${minutes}m ${remSeconds}s`;
+}
+
+function formatReadToolLine(tool) {
+  switch (tool.type) {
+    case "commandExecution": {
+      const details = [];
+      if (tool.status) {
+        details.push(tool.status);
+      }
+      if (tool.exitCode != null) {
+        details.push(`exit ${tool.exitCode}`);
+      }
+      const duration = formatReadDuration(tool.durationMs);
+      if (duration) {
+        details.push(duration);
+      }
+      const suffix = details.length > 0 ? ` (${details.join(", ")})` : "";
+      const head = `- [command] \`${tool.command || ""}\`${suffix}`;
+      if (tool.outputPreview) {
+        const indented = tool.outputPreview
+          .split(/\r?\n/)
+          .slice(0, 6)
+          .map((line) => `  > ${line}`)
+          .join("\n");
+        return `${head}\n${indented}`;
+      }
+      return head;
+    }
+    case "fileChange": {
+      const files = (tool.changes ?? []).map((change) => `${change.kind}:${change.path}`).join(", ");
+      const status = tool.status ? ` (${tool.status})` : "";
+      return `- [fileChange]${status} ${files || "no file details"}`;
+    }
+    case "mcpToolCall": {
+      const target = [tool.server, tool.tool].filter(Boolean).join("/");
+      const details = [tool.status, formatReadDuration(tool.durationMs)].filter(Boolean).join(", ");
+      const err = tool.error ? ` — error: ${tool.error}` : "";
+      return `- [mcp] ${target || "tool"}${details ? ` (${details})` : ""}${err}`;
+    }
+    case "dynamicToolCall": {
+      const target = [tool.namespace, tool.tool].filter(Boolean).join("/");
+      const details = [tool.status, formatReadDuration(tool.durationMs)].filter(Boolean).join(", ");
+      return `- [tool] ${target || "dynamic"}${details ? ` (${details})` : ""}`;
+    }
+    case "collabAgentToolCall": {
+      const targets = tool.receiverThreadIds?.length ? ` -> ${tool.receiverThreadIds.join(", ")}` : "";
+      const details = tool.status ? ` (${tool.status})` : "";
+      const prompt = tool.prompt ? `: ${tool.prompt}` : "";
+      return `- [subagent] ${tool.tool || "collab"}${targets}${details}${prompt}`;
+    }
+    case "webSearch":
+      return `- [webSearch] ${tool.query || "(query unavailable)"}`;
+    case "plan":
+      return `- [plan]\n${tool.text
+        .split(/\r?\n/)
+        .map((line) => `  ${line}`)
+        .join("\n")}`;
+    case "reasoning":
+      return `- [reasoning] ${(tool.summary ?? []).join(" | ")}`;
+    case "enteredReviewMode":
+      return `- [review] Entered review mode${tool.review ? `: ${tool.review}` : ""}`;
+    case "imageView":
+      return `- [imageView] ${tool.path || ""}`;
+    case "subAgentActivity":
+      return `- [subAgentActivity] ${tool.kind || "activity"} (${tool.agentThreadId || tool.agentPath || ""})`;
+    case "contextCompaction":
+      return "- [contextCompaction] Thread context compacted";
+    case "functionCallOutput": {
+      const target = [tool.namespace, tool.name].filter(Boolean).join("/");
+      return `- [functionCallOutput] ${target || "tool"}`;
+    }
+    default:
+      return `- [${tool.type}]`;
+  }
+}
+
+export function renderThreadReadResult(report) {
+  const thread = report.thread ?? {};
+  const pagination = report.pagination ?? {};
+  const turns = Array.isArray(report.turns) ? report.turns : [];
+
+  const lines = [
+    "# Codex Thread",
+    "",
+    `- Thread ID: \`${report.threadId}\``,
+    `- Deeplink: \`${report.deeplink}\``
+  ];
+
+  if (thread.name) {
+    lines.push(`- Title: ${thread.name}`);
+  }
+  if (thread.cwd) {
+    lines.push(`- Working directory: \`${thread.cwd}\``);
+  }
+  if (thread.status) {
+    lines.push(`- Status: ${thread.status}`);
+  }
+  if (thread.historyMode || report.historySource) {
+    const modeDetail = thread.historyMode ?? report.historySource;
+    lines.push(`- History mode: ${modeDetail}`);
+  }
+  if (thread.model || thread.modelProvider) {
+    const modelParts = [thread.model, thread.reasoningEffort ? `effort: ${thread.reasoningEffort}` : null].filter(Boolean);
+    const modelText = modelParts.length > 0 ? modelParts.join(", ") : thread.modelProvider;
+    const providerSuffix = thread.model && thread.modelProvider ? ` (${thread.modelProvider})` : "";
+    lines.push(`- Model: ${modelText}${providerSuffix}`);
+  }
+  if (thread.source) {
+    lines.push(`- Source: ${thread.source}`);
+  }
+  if (thread.createdAt) {
+    lines.push(`- Created: ${thread.createdAt}`);
+  }
+  if (thread.updatedAt) {
+    lines.push(`- Updated: ${thread.updatedAt}`);
+  }
+
+  let turnsSummary = `${turns.length}`;
+  if (pagination.totalTurns != null) {
+    turnsSummary = pagination.hasMore
+      ? `${turns.length} of ${pagination.totalTurns} (latest; use --all for full history)`
+      : `${turns.length} of ${pagination.totalTurns}`;
+  } else if (pagination.hasMore) {
+    turnsSummary = `${turns.length} (latest; older turns available via --all)`;
+  }
+  lines.push(`- Turns shown: ${turnsSummary}`);
+  lines.push(`- Resume in Codex: \`${report.resumeCommand}\``);
+
+  if (turns.length === 0) {
+    lines.push("", "No turns recorded in this thread yet.");
+    return `${lines.join("\n").trimEnd()}\n`;
+  }
+
+  for (const turn of turns) {
+    const metaParts = [];
+    if (turn.status) {
+      metaParts.push(turn.status);
+    }
+    if (turn.startedAt) {
+      metaParts.push(turn.startedAt);
+    }
+    const duration = formatReadDuration(turn.durationMs);
+    if (duration) {
+      metaParts.push(duration);
+    }
+    const metaSuffix = metaParts.length > 0 ? ` (${metaParts.join(" · ")})` : "";
+    const headingNumber = pagination.totalTurns != null || !pagination.hasMore ? `Turn ${turn.index}` : `Turn ${turn.id ?? turn.index}`;
+
+    lines.push("", "---", "", `## ${headingNumber}${metaSuffix}`);
+
+    if (turn.userMessages.length > 0) {
+      lines.push("", "### User", "", turn.userMessages.join("\n\n"));
+    }
+
+    if (turn.assistantMessages.length > 0) {
+      lines.push("", "### Codex", "");
+      for (let i = 0; i < turn.assistantMessages.length; i += 1) {
+        const message = turn.assistantMessages[i];
+        const prefix = report.includeTools && message.phase === "commentary" ? "[commentary] " : "";
+        lines.push(`${prefix}${message.text}`);
+        if (i < turn.assistantMessages.length - 1) {
+          lines.push("");
+        }
+      }
+    } else if (turn.error) {
+      lines.push("", "### Error", "", turn.error);
+    } else {
+      lines.push("", "### Codex", "", "_(no assistant text message recorded in this turn)_");
+    }
+
+    if (report.includeTools && Array.isArray(turn.tools) && turn.tools.length > 0) {
+      lines.push("", "### Tools & Activity", "");
+      for (const tool of turn.tools) {
+        lines.push(formatReadToolLine(tool));
+      }
+    } else if (!report.includeTools && turn.toolCount > 0) {
+      lines.push("", `_(${turn.toolCount} tool/activity item(s) omitted; rerun with \`--include-tools\` to inspect)_`);
+    }
+  }
+
+  return `${lines.join("\n").trimEnd()}\n`;
+}

@@ -13,14 +13,21 @@ import type {
   ReviewTarget,
   Thread,
   ThreadItem,
+  ThreadItemEntry,
+  ThreadItemsListParams,
+  ThreadItemsListResponse,
   ThreadListParams,
   ThreadListResponse,
+  ThreadReadParams,
+  ThreadReadResponse,
   ThreadResumeParams as RawThreadResumeParams,
   ThreadResumeResponse,
   ThreadSetNameParams,
   ThreadSetNameResponse,
   ThreadStartParams as RawThreadStartParams,
   ThreadStartResponse,
+  ThreadTurnsListParams,
+  ThreadTurnsListResponse,
   Turn,
   TurnInterruptParams,
   TurnInterruptResponse,
@@ -37,7 +44,11 @@ export type {
   ReviewTarget,
   Thread,
   ThreadItem,
+  ThreadItemEntry,
+  ThreadItemsListParams,
   ThreadListParams,
+  ThreadReadParams,
+  ThreadTurnsListParams,
   Turn,
   TurnInterruptParams,
   TurnStartParams,
@@ -63,6 +74,9 @@ export interface AppServerMethodMap {
   "thread/resume": { params: ThreadResumeParams; result: ThreadResumeResponse };
   "thread/name/set": { params: ThreadSetNameParams; result: ThreadSetNameResponse };
   "thread/list": { params: ThreadListParams; result: ThreadListResponse };
+  "thread/read": { params: ThreadReadParams; result: ThreadReadResponse };
+  "thread/turns/list": { params: ThreadTurnsListParams; result: ThreadTurnsListResponse };
+  "thread/items/list": { params: ThreadItemsListParams; result: ThreadItemsListResponse };
   "review/start": { params: ReviewStartParams; result: ReviewStartResponse };
   "turn/start": { params: TurnStartParams; result: TurnStartResponse };
   "turn/interrupt": { params: TurnInterruptParams; result: TurnInterruptResponse };
